@@ -60,6 +60,20 @@ public class QuestTreeLoader {
                 for (Quest q : tree.getQuests()) {
                     questIndex.put(q.getFullId(), q);
                 }
+                // 自定义 GUI 布局：提前解析一遍，把配置问题在启动时就报出来，
+                // 免得玩家点进 GUI 才发现某格是空的。
+                if (tree.hasLayout()) {
+                    java.util.List<String> problems = new java.util.ArrayList<>();
+                    QuestTree.LayoutResult lr = tree.parseLayout(problems);
+                    for (String p : problems) {
+                        plugin.getLogger().warning("[layout] " + p);
+                    }
+                    if (plugin.getConfig().getBoolean("debug.verbose", false)) {
+                        plugin.getLogger().info("树 " + tree.getId() + " 使用自定义 GUI 布局："
+                                + lr.slotToQuest.size() + " 个任务 + "
+                                + lr.emptySlots.size() + " 个空格占位");
+                    }
+                }
                 if (plugin.getConfig().getBoolean("debug.verbose", false)) {
                     plugin.getLogger().info("已加载任务树 " + tree.getId()
                             + "（" + tree.getQuests().size() + " 个任务）：" + f.getName());

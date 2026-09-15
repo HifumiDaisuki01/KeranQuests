@@ -284,21 +284,59 @@ public class GuiManager implements Listener {
         Inventory inv = Bukkit.createInventory(null, 54, com.keran.quests.util.Text.color(title));
         fillBackground(inv);
 
-        List<Quest> quests = tree.getQuestsByWeight();
-        int perPage = 21;
-        int totalPages = Math.max(1, (int) Math.ceil(quests.size() / (double) perPage));
-        int p = Math.max(0, Math.min(page, totalPages - 1));
-        int start = p * perPage;
+        // ---- 自定义布局优先 ----
+        // 配了 layout 就完全按布局摆，禁用自动排列与翻页；
+        // 没配则走原来的「按权重铺 21 格 + 翻页」。
+        if (tree.hasLayout()) {
+            QuestTree.LayoutResult lr = tree.parseLayout(null);
+            // 空格占位：画一层不可点的背景板（覆盖已有背景，保证样式统一）
+            String emptyIcon = tree.getLayoutEmptyIcon();
+            if (emptyIcon == null || emptyIcon.isBlank()) {
+                emptyIcon = cfg("gui.icons.bg", "quest_ui_bg");
+            }
+            for (int slot : lr.emptySlots) {
+                if (slot < 0 || slot >= 45) continue;
+                inv.setItem(slot, buildLayoutEmpty(emptyIcon));
+            }
+            // 任务图标
+            for (Map.Entry<Integer, Quest> e : lr.slotToQuest.entrySet()) {
+                int slot = e.getKey();
+                if (slot < 0 || slot >= 45) continue;
+                inv.setItem(slot, buildQuestNode(player, data, e.getValue()));
+            }
+        } else {
+            List<Quest> quests = tree.getQuestsByWeight();
+            int perPage = 21;
+            int totalPages = Math.max(1, (int) Math.ceil(quests.size() / (double) perPage));
+            int p = Math.max(0, Math.min(page, totalPages - 1));
+            int start = p * perPage;
 
-        int[] slots = {
-                10, 11, 12, 13, 14, 15, 16,
-                19, 20, 21, 22, 23, 24, 25,
-                28, 29, 30, 31, 32, 33, 34
-        };
+            int[] slots = {
+                    10, 11, 12, 13, 14, 15, 16,
+                    19, 20, 21, 22, 23, 24, 25,
+                    28, 29, 30, 31, 32, 33, 34
+            };
 
-        for (int i = 0; i < perPage && start + i < quests.size(); i++) {
-            Quest q = quests.get(start + i);
-            inv.setItem(slots[i], buildQuestNode(player, data, q));
+            for (int i = 0; i < perPage && start + i < quests.size(); i++) {
+                Quest q = quests.get(start + i);
+                inv.setItem(slots[i], buildQuestNode(player, data, q));
+            }
+
+            if (totalPages > 1) {
+                if (p > 0) {
+                    inv.setItem(48, new GuiItem(plugin, cfg("gui.icons.prev", "quest_ui_prev"), Material.ARROW)
+                            .name("&e← 上一页")
+                            .action("page_tree", treeId + "|" + (p - 1))
+                            .build());
+                }
+                if (p < totalPages - 1) {
+                    inv.setItem(50, new GuiItem(plugin, cfg("gui.icons.next", "quest_ui_next"), Material.ARROW)
+                            .name("&e下一页 →")
+                            .action("page_tree", treeId + "|" + (p + 1))
+                            .build());
+                }
+            }
+            pageState.put(player.getUniqueId(), p);
         }
 
         // 返回
@@ -312,24 +350,24 @@ public class GuiManager implements Listener {
                 .action("close", "")
                 .build());
 
-        if (totalPages > 1) {
-            if (p > 0) {
-                inv.setItem(48, new GuiItem(plugin, cfg("gui.icons.prev", "quest_ui_prev"), Material.ARROW)
-                        .name("&e← 上一页")
-                        .action("page_tree", treeId + "|" + (p - 1))
-                        .build());
-            }
-            if (p < totalPages - 1) {
-                inv.setItem(50, new GuiItem(plugin, cfg("gui.icons.next", "quest_ui_next"), Material.ARROW)
-                        .name("&e下一页 →")
-                        .action("page_tree", treeId + "|" + (p + 1))
-                        .build());
-            }
-        }
-
         currentView.put(player.getUniqueId(), View.QUEST_LIST);
-        pageState.put(player.getUniqueId(), p);
         openGui(player, inv);
+    }
+
+    /**
+     * 构建「自定义布局里的空格占位」图标：一层不可点的背景板。
+     * 显式抹掉 action 键，防止它被当成可点按钮。
+     */
+    private ItemStack buildLayoutEmpty(String iconId) {
+        ItemStack it = new GuiItem(plugin, iconId, Material.GRAY_STAINED_GLASS_PANE)
+                .name("&r")
+                .build();
+        ItemMeta meta = it.getItemMeta();
+        if (meta != null) {
+            meta.getPersistentDataContainer().remove(plugin.getActionKey());
+            it.setItemMeta(meta);
+        }
+        return it;
     }
 
     /** 构建单个任务图标。 */
