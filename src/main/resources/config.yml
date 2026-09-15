@@ -62,6 +62,11 @@ messages:
 
 # 界面设置
 gui:
+  # 标题格式。可用占位符：
+  #   title_quest_list   -> {tree} / {tree_name}、{main}、{main_total}、{side}、{side_total}
+  #   title_quest_detail -> {quest} / {quest_name}
+  #   title_choice       -> {title}
+  # 短名与长名等价，写哪个都行。
   title_tree_list: '&8任务树'
   title_quest_list: '&8任务列表 · {tree}'
   title_quest_detail: '&8任务详情 · {quest}'

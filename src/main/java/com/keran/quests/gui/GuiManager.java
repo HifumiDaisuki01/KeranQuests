@@ -44,6 +44,14 @@ public class GuiManager implements Listener {
     private final Map<UUID, View> currentView = new HashMap<>();
     /** 玩家在每个界面的翻页状态 */
     private final Map<UUID, Integer> pageState = new HashMap<>();
+    /**
+     * 界面跳转时被抑制的关闭事件登记：玩家 UUID -> 登记时间(毫秒)。
+     *
+     * <p>openInventory 切换界面会附带一次旧界面的 InventoryCloseEvent，
+     * 若让 onClose 正常处理会把刚写入的 currentView 擦掉，
+     * 导致新界面点击失灵。这里登记一次「应忽略的关闭」。
+     */
+    private final Map<UUID, Long> suppressClose = new HashMap<>();
 
     public GuiManager(KeranQuests plugin) {
         this.plugin = plugin;
@@ -111,7 +119,7 @@ public class GuiManager implements Listener {
 
         currentView.put(player.getUniqueId(), View.TREE_LIST);
         pageState.put(player.getUniqueId(), p);
-        player.openInventory(inv);
+        openGui(player, inv);
     }
 
     /** 构建任务树图标。 */
@@ -262,8 +270,12 @@ public class GuiManager implements Listener {
 
         String titleTpl = plugin.getConfig().getString("gui.title_quest_list",
                 "{tree_name} · 主线 {main}/{main_total} · 支线 {side}/{side_total}");
+        // 同时支持短名 {tree} 与长名 {tree_name}：
+        // 默认配置节里写的是 {tree}，文档里写的是 {tree_name}，
+        // 只认一个会让另一种写法的标题永远显示成花括号原文，故两者都替换。
         String title = com.keran.quests.util.Text.replace(titleTpl,
                 "tree_name", com.keran.quests.util.Text.strip(tree.getName()),
+                "tree", com.keran.quests.util.Text.strip(tree.getName()),
                 "main", String.valueOf(mainDone),
                 "main_total", String.valueOf(tree.countMainTotal()),
                 "side", String.valueOf(sideDone),
@@ -317,7 +329,7 @@ public class GuiManager implements Listener {
 
         currentView.put(player.getUniqueId(), View.QUEST_LIST);
         pageState.put(player.getUniqueId(), p);
-        player.openInventory(inv);
+        openGui(player, inv);
     }
 
     /** 构建单个任务图标。 */
@@ -467,10 +479,12 @@ public class GuiManager implements Listener {
         String title = com.keran.quests.util.Text.strip(quest.getName());
         if (title.length() > 32) title = title.substring(0, 32);
 
+        // 同时支持 {quest_name} 与短名 {quest}（默认配置节用的是 {quest}）
         Inventory inv = Bukkit.createInventory(null, 54,
                 com.keran.quests.util.Text.color(plugin.getConfig()
                         .getString("gui.title_quest_detail", "{quest_name}")
-                        .replace("{quest_name}", title)));
+                        .replace("{quest_name}", title)
+                        .replace("{quest}", title)));
         fillBackground(inv);
 
         QuestState state = p == null ? QuestState.LOCKED : p.getState();
@@ -575,7 +589,7 @@ public class GuiManager implements Listener {
                 .build());
 
         currentView.put(player.getUniqueId(), View.QUEST_DETAIL);
-        player.openInventory(inv);
+        openGui(player, inv);
     }
 
     /** 计算可见的阶段序号列表。 */
@@ -757,7 +771,7 @@ public class GuiManager implements Listener {
                 .build());
 
         currentView.put(player.getUniqueId(), View.CHOICE);
-        player.openInventory(inv);
+        openGui(player, inv);
     }
 
     // ==================================================================
@@ -867,13 +881,62 @@ public class GuiManager implements Listener {
 
     @EventHandler
     public void onClose(InventoryCloseEvent event) {
-        if (event.getPlayer() instanceof Player p) {
-            UUID id = p.getUniqueId();
-            // 完整清理本玩家在 GUI 里留下的全部状态，避免 pageState 这类缓存
-            // 随在线时间无限堆积（原实现只清了 currentView，属于内存泄漏）。
-            currentView.remove(id);
-            pageState.remove(id);
+        if (!(event.getPlayer() instanceof Player p)) return;
+        UUID id = p.getUniqueId();
+
+        // 【关键】不能在这里无条件清空 currentView。
+        //
+        // GUI 内部跳转的实现是「先 currentView.put(新界面) → 再 openInventory(新界面)」，
+        // 而 openInventory 切换界面时，服务端会先派发一次 InventoryCloseEvent 关掉旧界面。
+        // 如果这里无条件 remove，就会把刚 put 进去的「新界面」记录擦掉，
+        // 导致新界面虽然开着、currentView 却是 null ——
+        // 于是点击全部无响应、物品还能被拖走（因为事件没被取消）。
+        //
+        // 解决办法：跳转时把「下一次关闭」标记为可忽略。
+        // openXxx() 在 put 之后调用 suppressNextClose(player)，
+        // 这样紧跟而来的那次 close 事件不会误删新界面的记录。
+        // 登记过「跳转产生的关闭」→ 这次关闭是旧界面被替换，不能清 currentView。
+        // 加 1 秒有效期：万一登记后没等来 close 事件（例如 openInventory 抛异常），
+        // 超时后自动失效，避免这个标记一直误吞后续真正的关闭事件。
+        Long marked = suppressClose.remove(id);
+        if (marked != null && System.currentTimeMillis() - marked <= 1000L) {
+            return;
         }
+
+        currentView.remove(id);
+        pageState.remove(id);
+        suppressClose.remove(id);
+    }
+
+    /**
+     * 登记「该玩家下一次 InventoryCloseEvent 是界面跳转产生的，应忽略」。
+     *
+     * <p>在每次 openInventory 之前调用。若玩家手动关闭界面，
+     * 不会有人清掉这个标记，因此 {@link #onClick} 之外的地方也要注意：
+     * 这里用 Long 记录登记时间，超过 1 秒未消费则视为过期自动失效，
+     * 避免标记残留导致后续真正的关闭被漏清理。
+     */
+    private void suppressNextClose(Player player) {
+        suppressClose.put(player.getUniqueId(), System.currentTimeMillis());
+    }
+
+    /**
+     * 打开 GUI 的统一出口。
+     *
+     * <p>必须走这里而不是直接 {@code player.openInventory(inv)}：
+     * 切换界面会触发一次旧界面的 {@link InventoryCloseEvent}，
+     * 需要先登记 suppress 标记，避免 {@link #onClose} 把刚写入的 currentView 擦掉。
+     */
+    private void openGui(Player player, Inventory inv) {
+        suppressNextClose(player);
+        player.openInventory(inv);
+    }
+
+    /** 玩家下线时清理其全部 GUI 状态（由 PlayerLifecycleListener 调用）。 */
+    public void forget(UUID id) {
+        currentView.remove(id);
+        pageState.remove(id);
+        suppressClose.remove(id);
     }
 
     // ==================================================================

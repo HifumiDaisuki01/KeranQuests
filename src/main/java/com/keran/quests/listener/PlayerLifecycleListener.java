@@ -53,6 +53,8 @@ public class PlayerLifecycleListener implements Listener {
     public void onQuit(PlayerQuitEvent event) {
         Player p = event.getPlayer();
         plugin.getFreezeManager().unfreeze(p.getUniqueId());
+        // 清理 GUI 状态，避免 currentView / pageState / suppressClose 随上下线堆积
+        plugin.getGuiManager().forget(p.getUniqueId());
         plugin.getPlayerDataStore().unload(p.getUniqueId());
     }
 
