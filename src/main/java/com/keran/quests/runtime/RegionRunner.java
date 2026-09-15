@@ -38,6 +38,25 @@ public class RegionRunner {
     /** 玩家上次查询区域时的坐标，位移未超过 cache_radius 时复用缓存结果 */
     private final Map<UUID, org.bukkit.Location> lastQueryLoc = new HashMap<>();
 
+    /** 停留类要求的播报节流：玩家+阶段+要求 -> 上次播报的秒数 */
+    private final Map<String, Integer> lastStayNotice = new HashMap<>();
+
+    /**
+     * 停留类要求的「进入区域的真实时间戳」（毫秒）。
+     *
+     * <p><b>为什么不累加、而是记起点：</b>
+     * 之前用「每次检测 + 固定秒数」来推进进度，隐含假设"每次调度都恰好间隔
+     * check_interval 个 tick"。但 {@code runTaskTimer} 只是「至少间隔」，
+     * 服务器卡顿时（日志里的 {@code Can't keep up! Running 5006ms or 100 ticks
+     * behind}）单次调度就会被推迟数百 tick，累加值远小于真实流逝时间，
+     * 5 秒的停留任务实测要 22 秒才完成（慢 4.4 倍）。
+     *
+     * <p>改为记录进入区域的墙上时钟起点，进度直接用
+     * {@code now - enterAt} 现算，则无论检测周期、TPS、卡顿如何变化，
+     * 「停留 N 秒」永远是真实的 N 秒，同时也天然支持周期小于 1 秒的情况。
+     */
+    private final Map<String, Long> stayEnterAt = new HashMap<>();
+
     public RegionRunner(KeranQuests plugin) {
         this.plugin = plugin;
     }
@@ -56,6 +75,8 @@ public class RegionRunner {
         }
         regionCache.clear();
         lastQueryLoc.clear();
+        lastStayNotice.clear();
+        stayEnterAt.clear();
     }
 
     private void tick() {
@@ -113,24 +134,45 @@ public class RegionRunner {
 
             if (req.getType() == RequirementType.REGION_STAY) {
                 int cur = p.getRequirementProgress(si, ri);
+                String stayKey = stayKey(player, si, ri);
                 if (inside) {
-                    int nv = Math.min(req.getSeconds(), cur + 1);
-                    if (nv != cur) {
+                    // 按「墙上时钟」推进，而不是每次检测固定加一个配置值。
+                    // runTaskTimer 只保证「至少间隔」，卡顿时单次调度会被推迟很远，
+                    // 用配置值推算经过时间会让停留任务变慢（实测慢 4.4 倍）；
+                    // 用 now - enterAt 现算，则 TPS、周期、卡顿都不影响真实计时。
+                    Long enterAt = stayEnterAt.get(stayKey);
+                    if (enterAt == null) {
+                        // 首次检测到玩家进入区域：记录起点，进度从此刻算起
+                        enterAt = now;
+                        stayEnterAt.put(stayKey, enterAt);
+                    }
+                    int elapsed = (int) ((now - enterAt) / 1000L);
+                    int nv = Math.min(req.getSeconds(), elapsed);
+                    if (nv > cur) {
                         p.setRequirementProgress(si, ri, nv);
                         data.markDirty();
-                        // 显示进度（每 1/3 进度提示一次，避免刷屏）
-                        if (nv % Math.max(1, req.getSeconds() / 3) == 0 || nv >= req.getSeconds()) {
+                        // 进度播报节流：距上次播报至少过了总时长的 1/3（或已完成）
+                        Integer last = lastStayNotice.get(stayKey);
+                        boolean shouldNotice = nv >= req.getSeconds()
+                                || last == null
+                                || (nv - last) >= Math.max(1, req.getSeconds() / 3);
+                        if (shouldNotice) {
+                            lastStayNotice.put(stayKey, nv);
                             Text.send(player, "&7[" + Text.strip(quest.getName()) + "] "
                                     + "&f" + Text.strip(req.describe())
                                     + " &a" + nv + "&7/&f" + req.getSeconds());
                         }
                     }
-                } else if (cur > 0) {
+                } else if (cur > 0 || stayEnterAt.containsKey(stayKey)) {
                     // 离开区域：清零（你确认的"离开则中断"）
-                    p.setRequirementProgress(si, ri, 0);
-                    data.markDirty();
-                    Text.send(player, "&7[" + Text.strip(quest.getName()) + "] "
-                            + "&c离开了区域，计时清零。");
+                    if (cur > 0) {
+                        p.setRequirementProgress(si, ri, 0);
+                        data.markDirty();
+                        Text.send(player, "&7[" + Text.strip(quest.getName()) + "] "
+                                + "&c离开了区域，计时清零。");
+                    }
+                    lastStayNotice.remove(stayKey);
+                    stayEnterAt.remove(stayKey);
                 }
             } else if (req.getType() == RequirementType.REGION_ENTER) {
                 if (inside && p.getRequirementProgress(si, ri) < 1) {
@@ -148,6 +190,11 @@ public class RegionRunner {
 
         // 区域类进度变化后检查阶段完成
         plugin.getQuestManager().checkStageCompletion(player, quest, p, false);
+    }
+
+    /** 停留类要求的状态键：玩家 + 阶段 + 要求序号。 */
+    private String stayKey(Player player, int stageIdx, int reqIdx) {
+        return player.getUniqueId() + ":" + stageIdx + ":" + reqIdx;
     }
 
     /** 判断玩家是否在某区域（带缓存，每秒刷新）。 */

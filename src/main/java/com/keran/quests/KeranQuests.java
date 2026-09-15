@@ -184,19 +184,34 @@ public class KeranQuests extends JavaPlugin {
     }
 
     /** 取带前缀的消息模板并返回值（已做颜色转换）。 */
+    /**
+     * 取带前缀的消息模板并返回值（已做颜色转换）。
+     *
+     * <p>参数为 key1, value1, key2, value2 ... 的占位符键值对。
+     */
     public String prefixed(String key, Object... pairs) {
-        return prefixed(key, null, pairs);
+        String raw = getConfig().getString("messages." + key, null);
+        if (raw == null || raw.isBlank()) return "";
+        return com.keran.quests.util.Text.color(com.keran.quests.util.Text.replace(raw, pairs));
     }
 
     /**
-     * 取带前缀的消息模板并返回值（已做颜色转换）。
+     * 带兜底文案的版本。
+     *
+     * <p><b>为什么叫 prefixedOr 而不是重载 prefixed</b>：
+     * 两个方法都是变长参数时，Java 会优先选择"不需要把实参打包成数组"的那个。
+     * 也就是说 {@code prefixed("quest_accepted", "quest_name", name)} 这种
+     * 原本想走 {@code prefixed(String, Object...)} 的调用，会被静默解析成
+     * {@code prefixed(String key, String fallback, Object... pairs)}——
+     * "quest_name" 被当成兜底文案吃掉，占位符永远替换不出来。
+     * 改个名字即可让两种调用形式都走对，避免这类编译期无法察觉的陷阱。
      *
      * @param fallback 配置里没有该 key 时使用的兜底文案（可为 null）。
      *                 用途：服务器上的 config.yml 是首次安装时释放的旧副本，
      *                 插件升级后新增的消息键不会自动补进去；没有兜底就会出现
-     *                 "玩家收到一条空消息、控制台日志空白"的问题。
+     *                 "玩家收到一条空消息"的问题。
      */
-    public String prefixed(String key, String fallback, Object... pairs) {
+    public String prefixedOr(String key, String fallback, Object... pairs) {
         String raw = getConfig().getString("messages." + key, null);
         if (raw == null || raw.isBlank()) {
             raw = fallback == null ? "" : fallback;

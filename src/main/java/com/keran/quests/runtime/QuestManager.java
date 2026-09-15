@@ -96,7 +96,7 @@ public class QuestManager {
 
         // 4. 任务树解锁门槛（由某任务的 unlock_tree 解锁；未声明门槛的树默认开放）
         if (!isTreeUnlocked(data, quest)) {
-            return Text.color(plugin.prefixed("tree_locked", "&c该任务线尚未解锁。"));
+            return Text.color(plugin.prefixedOr("tree_locked", "&c该任务线尚未解锁。"));
         }
 
         // 5. 前置（放在并发上限之前：前置不满足时优先提示"未解锁"，语义更准确）
@@ -549,7 +549,7 @@ public class QuestManager {
             QuestTree target = plugin.getTreeLoader().getTree(unlockTree);
             String targetName = target == null ? unlockTree : target.getName();
             Text.send(player, plugin.getConfig().getString("messages.prefix", "")
-                    + plugin.prefixed("tree_unlocked", "&a已解锁新的任务线：&f{tree_name}",
+                    + plugin.prefixedOr("tree_unlocked", "&a已解锁新的任务线：&f{tree_name}",
                     "tree_name", targetName));
             plugin.getLogger().info("玩家 " + player.getName() + " 解锁任务树 " + unlockTree);
         }
