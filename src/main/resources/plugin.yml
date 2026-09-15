@@ -1,5 +1,5 @@
 name: KeranQuests
-version: 1.0.0
+version: ${version}
 main: com.keran.quests.KeranQuests
 api-version: '1.20'
 author: Keran

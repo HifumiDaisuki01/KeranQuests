@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'com.keran'
-version = '1.0.0'
+version = '1.0.2'
 
 repositories {
     mavenCentral()
@@ -53,5 +53,15 @@ jar {
             'Implementation-Title': 'KeranQuests',
             'Implementation-Version': version
         )
+    }
+}
+
+// 把 plugin.yml 里的 ${version} 替换成实际构建版本号，
+// 避免出现「jar 名 1.0.2 但插件自报 1.0.0」的错位。
+processResources {
+    inputs.property 'version', version
+    outputs.upToDateWhen { false }
+    filesMatching('plugin.yml') {
+        expand(version: version)
     }
 }

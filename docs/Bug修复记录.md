@@ -496,3 +496,267 @@ load average: 1.70, 3.96, 8.22    ← 4 核机器，空载却有 1.7 负载
 若要提升 TPS，方向是**减少插件总量**或**升级机器**（CPU 是瓶颈，内存也只剩 280M 空闲），
 而不是动 KeranQuests。
 
+
+---
+
+# 第五轮：第四批玩家实测反馈（3 个功能问题 + 材质终极排查）
+
+**版本：v1.0.2　日期：2026-09-15**
+
+## 一、任务线未解锁时却能直接接取未解锁任务
+
+### 现象
+玩家在没有完成前置任务线的情况下，可以绕过"未解锁"状态，
+直接接取未解锁任务线中的任务。
+
+### 根因
+存在**两套互不覆盖的解锁判定**：
+
+| 位置 | 判定依据 | 缺陷 |
+|---|---|---|
+| `GuiManager` | 只看 `prerequisites` | 忽略 `locked: true` 属性 |
+| `QuestManager.isTreeUnlocked` | 只看 `locked: true` | 忽略 `prerequisites` 前置 |
+
+GUI 侧认为"未解锁"（因此显示成灰色/？？？），
+但服务端接取校验走 `isTreeUnlocked`，只检查 `locked` 字段，
+于是配置了 `prerequisites` 但没有 `locked: true` 的任务线被判定为"已解锁"，
+接取请求直接放行。
+
+### 修复
+统一收敛到 `QuestManager.isTreeUnlocked`，两个条件**同时**判定：
+
+```java
+// ① 显式锁定
+if (tree.isLockedByDefault()) {
+    if (!data.getTreeState(treeId, "unlocked")) return false;
+}
+// ② 任务线前置
+if (tree.getPrerequisites() != null && !tree.getPrerequisites().isEmpty()) {
+    if (owner == null) return false;          // 保守拒绝
+    if (!checkPrerequisites(owner, tree.getPrerequisites())) return false;
+}
+return true;
+```
+
+`owner == null` 时**保守返回 false**（宁可拒绝，不可放过）。
+
+---
+
+## 二、标 ？？？ 的未解锁任务能点进详情
+
+### 现象
+任务列表里显示 `？？？` 的未解锁任务，
+鼠标可以直接点进去查看第一阶段详情（阶段名、目标、描述）。
+
+### 根因
+`GuiManager.buildQuestNode` **无条件**给每个任务图标挂上 `action`，
+"隐藏"只是视觉上把名字改成了 `？？？`，点击逻辑照旧，
+服务端也没有二次拦截。
+
+### 修复
+**双保险**：
+
+1. **前端**：`hidden == true` 时**不挂 action**，图标变成纯装饰，点不动；
+2. **服务端兜底**：`openQuestDetail` 入口处再次判定，命中则提示
+   「该任务尚未解锁，无法查看详情」并延迟返回列表。
+
+即使有人用改包/脚本伪造点击包，也无法绕过。
+
+---
+
+## 三、新增：放弃任务机制（禁弃 / 惩罚）
+
+### 需求
+为了防止乱刷，部分任务应能设置为**不可放弃**，或**放弃时受到惩罚**（执行命令）。
+默认行为：可以放弃 + 放弃扣除 5 生命值。
+
+### 配置写法（`quests/*.yml`）
+
+**简写**（一键禁止放弃）：
+```yaml
+abandon: false      # 等价于 allowed: false
+```
+
+**详写**：
+```yaml
+abandon:
+  allowed: true          # 是否允许放弃，默认 true
+  health: true           # 是否扣血，默认 true
+  health-cost: 5.0       # 扣除量，默认 5.0
+  commands:              # 放弃时执行的命令，支持延迟
+    - "say %player% 放弃了一个任务"
+    - "delay 40 | effect give %player% slowness 10 1"
+```
+
+支持 `delay <ticks> | <命令>` 语法与 `%player%` 占位符。
+
+### 实现
+`QuestManager.abandon()`：
+
+```java
+if (!quest.isAbandonAllowed()) {
+    msg(player, "quest_abandon_denied");
+    return;
+}
+clearProgress(player, quest);
+msg(player, "quest_abandoned");
+applyAbandonPenalty(player, quest);
+```
+
+`applyAbandonPenalty` 先扣血（下限保护 `0.5`，避免直接死亡），
+再按延迟队列逐条派发命令。
+
+### 兼容性
+`Quest.fromConfig` 同时兼容简写布尔值与详写节，
+**老的配置文件无需改动**，默认值即为"可放弃 + 扣 5 血"。
+
+---
+
+## 四、★ 材质终极排查：Oraxen 1.218 与 Paper 1.20.1 不兼容
+
+### 现象
+GUI 里所有图标**全部回落成原版材质**（书、木棍），
+Oraxen 自定义贴图完全看不到。
+
+### 排查链路（逐层排除）
+
+| # | 检查项 | 结果 |
+|---|---|---|
+| 1 | Oraxen 配置 `items/*.yml` | 正常 |
+| 2 | 贴图 PNG 文件 | 24 个全在 |
+| 3 | `pack.zip` 内 `paper.json` | 含 CMD 9000-9023 overrides |
+| 4 | HTTP 资源包服务 | 正常返回 |
+| 5 | Oraxen dispatch 配置 | 正常 |
+| 6 | `kq selftest` | 22/22 图标 `exists=true` |
+| 7 | **`kq icon` 实际构建** | **全部返回 null** ← 卡在这里 |
+
+前面 6 层全绿，只有第 7 层构建失败，说明问题在**插件调用 Oraxen 的那一步**。
+
+### 真正的根因
+
+Oraxen **1.218.0** 的 `ItemBuilder` 类字节码引用了
+`org.bukkit.inventory.meta.components.FoodComponent`
+——这是 **Paper 1.20.5+** 才引入的类。
+
+在 Paper **1.20.1** 上，JVM 加载 `ItemBuilder` 类本身即抛：
+
+```
+java.lang.NoClassDefFoundError:
+    org/bukkit/inventory/meta/components/FoodComponent
+```
+
+**类加载失败意味着任何对 `ItemBuilder` 的反射调用都会失败**，
+包括我第一版兜底代码里用的 `getType()` / `getOraxenMeta()`。
+
+日志中的另一条佐证：
+```
+Oraxen | Failed to load guarded NMS handler; NMS features will be disabled
+```
+
+### 我排查中犯的错
+第一版兜底方案**仍然从 `ItemBuilder` 上取值**
+（先试 `build()`，失败则 `getType()` + `getOraxenMeta().getCustomModelData()`），
+但这两个方法同样要先加载 `ItemBuilder` 类，因此**同样抛 `NoClassDefFoundError`**。
+
+更糟的是 `Hook.call` 静默吞掉了异常，
+导致表面现象是"返回 null"，误导了排查方向。
+
+**教训**：反射兜底不能只兜"方法调用失败"，
+还要考虑**类本身加载失败**；异常绝不能静默吞掉。
+
+### 最终修复方案：完全绕开 ItemBuilder
+
+改为由插件**自己读取 Oraxen 的 `items/*.yml` 配置**，
+手工拼装 `ItemStack`：
+
+```java
+// 从 YAML 读 material 与 Pack.custom_model_data
+Material material = Material.matchMaterial(node.getString("material"));
+int cmd = node.getInt("Pack.custom_model_data");
+
+ItemStack stack = new ItemStack(material, Math.max(1, Math.min(64, amount)));
+if (cmd != 0) {
+    ItemMeta im = stack.getItemMeta();
+    im.setCustomModelData(cmd);
+    stack.setItemMeta(im);
+}
+```
+
+同时保留路径 1：优先尝试原生 `builder.build()`（在版本匹配的服务器上可用），
+失败才走手工构建，做到**高低版本都能跑**。
+
+### 安全 API 确认
+排查中确认以下两个方法**不受类加载问题影响**（只涉及 `Set` 与 `ItemMeta`/PDC）：
+
+- `OraxenItems.exists(String)` —— 仅查 `Set`
+- `OraxenItems.getIdByItem(ItemStack)` —— 仅查 `ItemMeta`/PDC
+
+因此**物品识别功能一直是正常的**，只有"构建展示物品"这条路断了。
+
+### 验证结果
+
+部署 v1.0.2 后执行 `kq icon`：
+
+```
+已从 Oraxen 配置解析 149 个物品定义（绕过 ItemBuilder）。
+ - quest_ui_done      | 材质=PAPER | CMD=9000
+ - quest_ui_locked    | 材质=PAPER | CMD=9001
+ - quest_ui_failed    | 材质=PAPER | CMD=9002
+ - quest_ui_cooldown  | 材质=PAPER | CMD=9003
+ - quest_ui_active    | 材质=PAPER | CMD=9004
+ - quest_ui_available | 材质=PAPER | CMD=9005
+ - quest_ui_main      | 材质=PAPER | CMD=9006
+ - quest_ui_side      | 材质=PAPER | CMD=9007
+ - quest_ui_unknown   | 材质=PAPER | CMD=9008
+ - quest_ui_choice    | 材质=PAPER | CMD=9009
+ - quest_ui_bg        | 材质=PAPER | CMD=9014
+ - quest_ui_prev      | 材质=PAPER | CMD=9019
+ - quest_ui_next      | 材质=PAPER | CMD=9020
+ - quest_ui_close     | 材质=PAPER | CMD=9018
+```
+
+**24 个 UI 图标全部正确构建为 PAPER + CMD 9000-9023，无一回落原版材质。**
+
+`kq selftest`：**全绿**（UI 材质 22/22 存在，无回归）。
+
+### `kq icon` 诊断命令
+本轮顺手新增了 `/kq icon` 诊断子命令，输出
+`配置= / exists= / 材质= / CMD= / 错误=` 五项。
+
+> 提示：CMD 有值但客户端没贴图 = 资源包问题；CMD 无值 = 插件问题。
+
+这条命令以后排查材质问题会非常省事，建议保留。
+
+### 客户端需要做的
+材质修复属于**服务端侧**（构建出的 ItemStack 现在带上了正确的 CMD）。
+玩家需要**删除旧资源包缓存并重新下载**，否则客户端仍用缓存里的旧包渲染。
+
+---
+
+## 五、版本与构建
+
+| 项 | 值 |
+|---|---|
+| 版本 | **1.0.2** |
+| 产物 | `out/KeranQuests-1.0.2.jar` |
+| 构建 | `gradle build -x test --offline` |
+| 服务器验证 | Paper 1.20.1，插件以 v1.0.2 成功加载 |
+| 自检 | 全绿 |
+
+### 顺带修掉的一个小问题
+`src/main/resources/plugin.yml` 里的 `version` 此前**硬编码为 1.0.0**，
+导致出现「jar 名 1.0.2 但插件自报 1.0.0」的错位（日志里看得很别扭，也让版本确认变得不可靠）。
+
+已改为 `${version}` 占位符，并在 `build.gradle` 增加 `processResources` 展开：
+
+```groovy
+processResources {
+    inputs.property 'version', version
+    outputs.upToDateWhen { false }
+    filesMatching('plugin.yml') {
+        expand(version: version)
+    }
+}
+```
+
+现在插件自报版本与 jar 名、`Implementation-Version` **三者始终一致**。

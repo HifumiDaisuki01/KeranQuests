@@ -139,8 +139,30 @@ public class QuestManager {
         String treeId = quest.getTreeId();
         if (treeId == null) return true;
         QuestTree tree = plugin.getTreeLoader().getTree(treeId);
-        if (tree == null || !tree.isLockedByDefault()) return true;
-        return "true".equalsIgnoreCase(data.getTreeState(treeId, "unlocked"));
+        if (tree == null) return true;
+
+        // ① 显式锁定：树配了 locked: true，必须靠 unlock_tree 解锁
+        if (tree.isLockedByDefault()
+                && !"true".equalsIgnoreCase(data.getTreeState(treeId, "unlocked"))) {
+            return false;
+        }
+
+        // ② 前置任务：树配了 prerequisites，必须满足才放行。
+        //
+        // 【为什么必须在这里判】此前只判了 ①，导致「配了前置但没配 locked: true」
+        // 的任务树出现严重漏洞：GUI 的任务树图标按前置正确显示「未解锁」，
+        // 但 canAccept / getUnlockStatus 只认 locked 标记、认为树已解锁，
+        // 于是玩家能直接接取未解锁任务树里的任务、任务也显示成「可接取」。
+        // 两处判定必须一致，否则 UI 与逻辑会各说各话。
+        Prerequisite treePre = tree.getPrerequisites();
+        if (treePre != null && !treePre.isEmpty()) {
+            Player owner = plugin.getServer().getPlayer(data.getUuid());
+            // 玩家不在线时无法校验权限/背包类前置，此时保守判定为「未解锁」，
+            // 避免因为拿不到 Player 就误放行（该方法的所有调用点都在玩家在线场景）。
+            if (owner == null) return false;
+            if (!checkPrerequisites(owner, treePre)) return false;
+        }
+        return true;
     }
 
     /** 统计玩家某类型的进行中任务数。 */
@@ -679,6 +701,13 @@ public class QuestManager {
         if (p == null || p.getState() != QuestState.ACTIVE) {
             return Text.color("&c该任务不在进行中。");
         }
+
+        // 禁止放弃的任务直接拦下（用于防止接了不做反复刷）
+        if (!quest.isAbandonAllowed()) {
+            return Text.color(plugin.prefixedOr("quest_abandon_denied",
+                    "&c该任务不允许放弃。"));
+        }
+
         p.setState(QuestState.AVAILABLE);
         p.clearAllProgress();
         data.markDirty();
@@ -687,8 +716,77 @@ public class QuestManager {
         }
         Text.send(player, plugin.getConfig().getString("messages.prefix", "")
                 + plugin.prefixed("quest_abandoned", "quest_name", quest.getName()));
+
+        // ---- 放弃惩罚 ----
+        applyAbandonPenalty(player, quest);
+
         plugin.getPlayerDataStore().save(data);
         return null;
+    }
+
+    /**
+     * 执行放弃任务的惩罚。
+     *
+     * <p>顺序：先扣血、再跑自定义命令。
+     * 扣血用 {@code setHealth} 而不是 {@code damage}，因为 damage 会被护甲、
+     * 抗性提升、无敌帧影响，导致惩罚不稳定；setHealth 语义明确、可预期。
+     * 但要注意血量下限——setHealth(<=0) 会直接判定死亡，
+     * 这里钳到最小 0.5（半颗心），避免「放弃任务顺手死一次」的体验灾难。
+     */
+    private void applyAbandonPenalty(Player player, Quest quest) {
+        if (quest.isAbandonHealthEnabled()) {
+            double cost = quest.getAbandonHealthCost();
+            double max = player.getMaxHealth();
+            // 扣血后至少留 0.5 点，避免直接死亡
+            double target = Math.max(0.5D, Math.min(max, player.getHealth() - cost));
+            player.setHealth(target);
+            Text.send(player, plugin.prefixedOr("quest_abandon_penalty_health",
+                    "&c放弃任务，扣除 &f{amount} &c点生命值。",
+                    "amount", fmt(cost)));
+        }
+
+        for (String raw : quest.getAbandonCommands()) {
+            if (raw == null || raw.isBlank()) continue;
+            String cmd = raw.replace("%player%", player.getName())
+                    .replace("{player}", player.getName());
+            // 支持 "delay <ticks> | <command>" 延迟语法，与其它钩子保持一致
+            if (cmd.startsWith("delay ")) {
+                int bar = cmd.indexOf('|');
+                if (bar > 0) {
+                    int ticks;
+                    try {
+                        ticks = Integer.parseInt(cmd.substring(6, bar).trim());
+                    } catch (NumberFormatException e) {
+                        ticks = 0;
+                    }
+                    String finalCmd = cmd.substring(bar + 1).trim();
+                    if (ticks > 0) {
+                        finalCmd = finalCmd.replace("%player%", player.getName());
+                        String fc = finalCmd;
+                        plugin.getServer().getScheduler().runTaskLater(plugin,
+                                () -> dispatchCommand(fc, player), ticks);
+                        continue;
+                    }
+                    cmd = finalCmd;
+                }
+            }
+            dispatchCommand(cmd, player);
+        }
+    }
+
+    /** 以控制台身份执行命令（找不到玩家时用玩家身份兜底，保证至少能跑）。 */
+    private void dispatchCommand(String cmd, Player player) {
+        if (cmd == null || cmd.isBlank()) return;
+        String c = cmd.startsWith("/") ? cmd.substring(1) : cmd;
+        if (!plugin.getServer().dispatchCommand(plugin.getServer().getConsoleSender(), c)) {
+            if (player != null && player.isOnline()) player.performCommand(c);
+        }
+    }
+
+    /** 去掉多余小数位：5.0 -> 5，2.5 -> 2.5。 */
+    private String fmt(double v) {
+        if (v == Math.floor(v) && !Double.isInfinite(v)) return String.valueOf((long) v);
+        return String.valueOf(v);
     }
 
     /** 重置任务（管理指令）。 */

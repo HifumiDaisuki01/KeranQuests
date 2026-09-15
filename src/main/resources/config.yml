@@ -48,6 +48,10 @@ messages:
   quest_complete_msg: '&a任务完成：&f{quest_name}'
   quest_failed: '&c任务失败：&f{quest_name} &7（{fail_reason}）'
   quest_abandoned: '&7已放弃任务：&f{quest_name}'
+  # 禁止放弃的任务被点「放弃」时的提示
+  quest_abandon_denied: '&c该任务不允许放弃。'
+  # 放弃惩罚扣血时的提示（{amount} 为扣除的生命值点数）
+  quest_abandon_penalty_health: '&c放弃任务，扣除 &f{amount} &c点生命值。'
   stage_completed: '&e阶段完成：&f{stage_name}'
   cannot_accept_locked: '&c该任务尚未解锁，请先完成前置任务。'
   cannot_accept_cooldown: '&c该任务冷却中，剩余 &f{time}&c。'

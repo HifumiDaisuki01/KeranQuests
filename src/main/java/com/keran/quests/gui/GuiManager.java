@@ -409,11 +409,18 @@ public class GuiManager implements Listener {
 
         String name = hidden ? "&8？？？" : quest.getName();
 
-        return new GuiItem(plugin, iconId, fallback)
+        GuiItem item = new GuiItem(plugin, iconId, fallback)
                 .name(name)
-                .lore(lore)
-                .action("open_quest", quest.getFullId())
-                .build();
+                .lore(lore);
+        // 只有「可见」的任务才挂点击动作。
+        //
+        // hidden 为真时任务显示为「？？？」，此前的实现无条件挂 open_quest，
+        // 导致玩家点 ？？？ 就能看到完整的第一阶段详情，可见性形同虚设。
+        // 这里不挂 action，onClick 取不到标识就会直接返回，点不动。
+        if (!hidden) {
+            item.action("open_quest", quest.getFullId());
+        }
+        return item.build();
     }
 
     /** 描述某任务缺少的前置。 */
@@ -473,8 +480,24 @@ public class GuiManager implements Listener {
             player.closeInventory();
             return;
         }
+
+        // 服务端兜底：显示为「？？？」的任务不允许打开详情。
+        //
+        // 仅靠「不挂 action」不够——玩家可能通过其它途径构造打开请求
+        // （旧界面残留点击、或未来新增入口忘了判）。这里按与 buildQuestNode
+        // **完全相同**的判据再拦一次，保证 UI 显示与逻辑行为不分家。
         PlayerData data = plugin.getPlayerData(player);
         QuestProgress p = data.getProgress(quest.getFullId());
+        QuestManager.UnlockStatus st = plugin.getQuestManager().getUnlockStatus(player, quest);
+        QuestState stt = p == null ? QuestState.LOCKED : p.getState();
+        boolean hiddenNow = st == QuestManager.UnlockStatus.LOCKED_HIDDEN && stt == QuestState.LOCKED;
+        if (hiddenNow) {
+            com.keran.quests.util.Text.send(player, "&c该任务尚未解锁，无法查看详情。");
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline()) openQuestList(player, quest.getTreeId(), 0);
+            });
+            return;
+        }
 
         String title = com.keran.quests.util.Text.strip(quest.getName());
         if (title.length() > 32) title = title.substring(0, 32);
@@ -561,11 +584,25 @@ public class GuiManager implements Listener {
                     .action("track", quest.getFullId())
                     .build());
             if (plugin.getConfig().getBoolean("gui.allow_abandon_in_gui", true)) {
-                inv.setItem(50, new GuiItem(plugin, cfg("gui.icons.failed", "quest_ui_failed"), Material.BARRIER)
-                        .name("&c放弃任务")
-                        .lore("&7进度将被清空")
-                        .action("abandon", quest.getFullId())
-                        .build());
+                if (quest.isAbandonAllowed()) {
+                    GuiItem ab = new GuiItem(plugin, cfg("gui.icons.failed", "quest_ui_failed"), Material.BARRIER)
+                            .name("&c放弃任务")
+                            .lore("&7进度将被清空");
+                    // 让玩家在点之前就知道代价，避免"点完才发现掉血"
+                    if (quest.isAbandonHealthEnabled()) {
+                        ab.lore("&c代价：扣除 &f" + fmtNum(quest.getAbandonHealthCost())
+                                + " &c点生命值");
+                    }
+                    ab.action("abandon", quest.getFullId());
+                    inv.setItem(50, ab.build());
+                } else {
+                    // 不允许放弃：按钮置灰且不挂 action（点了没反应）
+                    inv.setItem(50, new GuiItem(plugin, cfg("gui.icons.locked", "quest_ui_locked"),
+                            Material.GRAY_DYE)
+                            .name("&8放弃任务")
+                            .lore("&7该任务不允许放弃")
+                            .build());
+                }
             }
         } else {
             String err = plugin.getQuestManager().canAccept(player, quest);
@@ -969,5 +1006,11 @@ public class GuiManager implements Listener {
         } catch (Exception e) {
             return def;
         }
+    }
+
+    /** 去掉多余小数位：5.0 -> 5，2.5 -> 2.5。 */
+    private static String fmtNum(double v) {
+        if (v == Math.floor(v) && !Double.isInfinite(v)) return String.valueOf((long) v);
+        return String.valueOf(v);
     }
 }

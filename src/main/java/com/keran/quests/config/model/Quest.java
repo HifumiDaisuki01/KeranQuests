@@ -67,6 +67,25 @@ public class Quest {
      */
     private final boolean hidden;
 
+    // ---- 放弃任务的限制与惩罚 ----
+
+    /**
+     * 是否允许放弃该任务。
+     *
+     * <p>默认 {@code true}（可放弃）。设为 {@code false} 时玩家无法放弃，
+     * 用于防止「接了不做反复刷」——典型场景是需要消耗稀有道具或占用并发名额的任务。
+     */
+    private final boolean abandonAllowed;
+
+    /** 放弃时是否扣血。默认 {@code true}，配合 {@link #abandonHealthCost} 使用。 */
+    private final boolean abandonHealthEnabled;
+
+    /** 放弃时扣除的生命值（点）。默认 5，即 2.5 颗心。 */
+    private final double abandonHealthCost;
+
+    /** 放弃时额外执行的命令（支持 %player% 占位符，可配 delay 语法）。 */
+    private final List<String> abandonCommands;
+
     private Quest(String treeId, String id, String name, QuestType type, int weight, String icon,
                   StageVisibility stageVisibility, Prerequisite prerequisites, List<QuestStage> stages,
                   List<String> onStart, List<String> onStageComplete, List<String> onComplete,
@@ -75,7 +94,9 @@ public class Quest {
                   boolean resetProgressOnComplete, String exclusiveGroup, List<String> exclusiveWith,
                   boolean terminatesTree, boolean failOnDeath, int timeLimit, int failCooldown,
                   List<ForbiddenRegion> forbiddenRegions, int maxKills, List<String> maxKillTypes,
-                  ResetMode resetOnFail, String unlockTree, boolean hidden) {
+                  ResetMode resetOnFail, String unlockTree, boolean hidden,
+                  boolean abandonAllowed, boolean abandonHealthEnabled, double abandonHealthCost,
+                  List<String> abandonCommands) {
         this.treeId = treeId;
         this.id = id;
         this.name = name;
@@ -108,6 +129,10 @@ public class Quest {
         this.resetOnFail = resetOnFail;
         this.unlockTree = unlockTree;
         this.hidden = hidden;
+        this.abandonAllowed = abandonAllowed;
+        this.abandonHealthEnabled = abandonHealthEnabled;
+        this.abandonHealthCost = abandonHealthCost;
+        this.abandonCommands = abandonCommands;
     }
 
     public static Quest fromConfig(String treeId, String id, ConfigurationSection sec) {
@@ -201,11 +226,43 @@ public class Quest {
         // 隐藏标记：hidden: true 或 hide: true 均可
         boolean hidden = sec.getBoolean("hidden", false) || sec.getBoolean("hide", false);
 
+        // ---- 放弃任务的限制与惩罚 ----
+        //
+        // 两种写法都支持：
+        //   简写  abandon: false                      → 禁止放弃
+        //   详写  abandon:
+        //           allowed: false
+        //           health: 5            （扣血量，0 = 不扣血）
+        //           commands: [...]      （额外执行的命令）
+        //
+        // 默认：allowed = true（可放弃）、health = 5（扣 5 点生命值 = 2.5 颗心）。
+        // 用 getConfigurationSection 判类型，避免简写布尔值被当成配置节读取时抛异常。
+        boolean abandonAllowed = true;
+        boolean abandonHealthEnabled = true;
+        double abandonHealthCost = 5.0D;
+        List<String> abandonCommands = new ArrayList<>();
+
+        Object abandonRaw = sec.get("abandon");
+        if (abandonRaw instanceof Boolean b) {
+            // 简写形式：abandon: false 直接禁止放弃
+            abandonAllowed = b;
+        } else {
+            ConfigurationSection as = sec.getConfigurationSection("abandon");
+            if (as != null) {
+                abandonAllowed = as.getBoolean("allowed", true);
+                abandonHealthCost = as.getDouble("health", 5.0D);
+                // health: 0 表示不扣血
+                abandonHealthEnabled = abandonHealthCost > 0;
+                abandonCommands = new ArrayList<>(as.getStringList("commands"));
+            }
+        }
+
         return new Quest(treeId, id, name, type, weight, icon, sv, pre, stages,
                 onStart, onStageComplete, onComplete, onFail, money, exp, rewardItems,
                 rewardCommands, repeatable, cooldown, resetOnComplete, exclusiveGroup,
                 exclusiveWith, terminatesTree, failOnDeath, timeLimit, failCooldown,
-                forbidden, maxKills, maxKillTypes, resetOnFail, unlockTree, hidden);
+                forbidden, maxKills, maxKillTypes, resetOnFail, unlockTree, hidden,
+                abandonAllowed, abandonHealthEnabled, abandonHealthCost, abandonCommands);
     }
 
     private static ConfigurationSection toSection(Object obj) {
@@ -359,6 +416,26 @@ public class Quest {
     /** 是否为隐藏任务（前置未满足时显示为 ？？？）。 */
     public boolean isHidden() {
         return hidden;
+    }
+
+    /** 是否允许玩家放弃该任务（默认 true）。 */
+    public boolean isAbandonAllowed() {
+        return abandonAllowed;
+    }
+
+    /** 放弃时是否扣血（由 abandon.health > 0 决定）。 */
+    public boolean isAbandonHealthEnabled() {
+        return abandonHealthEnabled;
+    }
+
+    /** 放弃时扣除的生命值点数（默认 5，即 2.5 颗心）。 */
+    public double getAbandonHealthCost() {
+        return abandonHealthCost;
+    }
+
+    /** 放弃时额外执行的命令列表。 */
+    public List<String> getAbandonCommands() {
+        return abandonCommands;
     }
 
     /** 奖励物品。 */

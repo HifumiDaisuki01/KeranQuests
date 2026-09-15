@@ -83,6 +83,7 @@ public class KqCommand implements CommandExecutor, TabCompleter {
             case "reload" -> doReload(sender);
             case "selftest" -> doSelftest(sender);
             case "debug" -> doDebug(sender, args);
+            case "icon" -> doIconDiag(sender);
             case "help" -> sendHelp(sender, label);
             default -> sendHelp(sender, label);
         }
@@ -350,6 +351,53 @@ public class KqCommand implements CommandExecutor, TabCompleter {
         }
     }
 
+    /**
+     * 图标自检：逐个构建 GUI 图标，报告实际材质与 custom_model_data。
+     *
+     * <p>用于排查「GUI 里看不到 Oraxen 材质」——如果 <b>CMD 为空</b>，
+     * 说明 Oraxen 物品没被正确构建（插件侧问题）；
+     * 如果 <b>CMD 正常但客户端仍显示原版贴图</b>，则是资源包没加载（客户端侧问题）。
+     * 这条命令能把两类原因一刀切开，省去来回猜。
+     */
+    private void doIconDiag(CommandSender sender) {
+        if (!checkAdmin(sender)) return;
+        Text.sendRaw(sender, "&8&m----&r &e图标自检 &8&m----");
+        boolean ox = plugin.getOraxenHook().isAvailable();
+        Text.sendRaw(sender, " &7Oraxen 挂钩：&f" + (ox ? "可用" : "&c不可用"));
+
+        String[][] icons = {
+                {"quest_ui_done", "done"}, {"quest_ui_locked", "locked"},
+                {"quest_ui_failed", "failed"}, {"quest_ui_cooldown", "cooldown"},
+                {"quest_ui_active", "active"}, {"quest_ui_available", "available"},
+                {"quest_ui_main", "main"}, {"quest_ui_side", "side"},
+                {"quest_ui_unknown", "unknown"}, {"quest_ui_choice", "choice"},
+                {"quest_ui_bg", "bg"}, {"quest_ui_prev", "prev"},
+                {"quest_ui_next", "next"}, {"quest_ui_close", "close"},
+        };
+        for (String[] pair : icons) {
+            String id = pair[0];
+            String cfgKey = pair[1];
+            boolean exists = plugin.getOraxenHook().exists(id);
+            org.bukkit.inventory.ItemStack stack =
+                    plugin.getOraxenHook().build(id, 1);
+            String mat = stack == null ? "&cnull（回落原版）" : stack.getType().name();
+            int cmd = -1;
+            if (stack != null && stack.getItemMeta() != null) {
+                cmd = stack.getItemMeta().hasCustomModelData()
+                        ? stack.getItemMeta().getCustomModelData() : -1;
+            }
+            String configVal = plugin.getConfig().getString("gui.icons." + cfgKey, id);
+            String err = plugin.getOraxenHook().getLastError();
+            Text.sendRaw(sender, " &7- &f" + id
+                    + " &8| 配置=&f" + configVal
+                    + " &8| exists=&f" + exists
+                    + " &8| 材质=&f" + mat
+                    + " &8| CMD=&f" + (cmd < 0 ? "&c无" : cmd)
+                    + (err == null ? "" : " &8| &c错误=&f" + err));
+        }
+        Text.sendRaw(sender, "&7提示：CMD 有值但客户端没贴图 = 资源包问题；CMD 无值 = 插件问题。");
+    }
+
     private boolean checkAdmin(CommandSender sender) {
         if (sender.hasPermission("kq.admin") || sender.isOp()
                 || !(sender instanceof Player)) {
@@ -368,6 +416,7 @@ public class KqCommand implements CommandExecutor, TabCompleter {
         Text.sendRaw(sender, " &f/" + label + " reload &7- 重载配置");
         Text.sendRaw(sender, " &f/" + label + " selftest &7- 环境自检");
         Text.sendRaw(sender, " &f/" + label + " debug <玩家> &7- 查看档案");
+        Text.sendRaw(sender, " &f/" + label + " icon &7- 图标自检（排查 UI 材质）");
         Text.sendRaw(sender, " &f/ka &7- 快速查看当前任务");
     }
 
@@ -379,7 +428,7 @@ public class KqCommand implements CommandExecutor, TabCompleter {
                                       @NotNull String alias, @NotNull String[] args) {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
-            out.addAll(Arrays.asList("list", "track", "abandon", "reload", "selftest", "debug", "help"));
+            out.addAll(Arrays.asList("list", "track", "abandon", "reload", "selftest", "debug", "icon", "help"));
         } else if (args.length == 2) {
             String sub = args[0].toLowerCase();
             if (sub.equals("track") || sub.equals("abandon")) {
