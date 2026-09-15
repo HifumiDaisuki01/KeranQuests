@@ -38,8 +38,40 @@ public class QuestManager {
 
     private final KeranQuests plugin;
 
+    /**
+     * 抉择界面最近一次重弹的时间戳（毫秒），按玩家记录。
+     *
+     * <p>抉择阶段会被 RegionRunner 每秒轮询到，而它又需要"能重新打开界面"，
+     * 所以必须节流，否则关掉界面会被每秒弹一次，玩家会被烦死。
+     * 间隔由 {@code gui.choice_reopen_interval_sec} 控制（默认 5 秒）。
+     */
+    private final java.util.Map<java.util.UUID, Long> choiceReopenAt = new java.util.concurrent.ConcurrentHashMap<>();
+
     public QuestManager(KeranQuests plugin) {
         this.plugin = plugin;
+    }
+
+    /**
+     * 玩家当前是否正开着某个抉择界面。
+     *
+     * <p>用标题特征判断（标题取 {@code gui.title_choice} 的固定部分），
+     * 这样不用给 Inventory 打额外标记。目的是避免"玩家正在看着界面时又弹一次"。
+     * 判断失败也不影响功能 —— 只是可能多弹一次，节流仍在兜底。
+     */
+    private boolean choiceGuiVisible(Player player) {
+        try {
+            String raw = plugin.getConfig().getString("gui.title_choice", "\u26a0 \u6289\u62e9 \u00b7 {title}");
+            // 取标题中 "{title}" 之前的部分作为固定前缀，忽略目标玩家染色的差异
+            int cut = raw.indexOf("{title}");
+            String prefix = cut > 0 ? raw.substring(0, cut) : raw;
+            prefix = com.keran.quests.util.Text.strip(prefix);
+            String title = com.keran.quests.util.Text.strip(
+                    player.getOpenInventory().getTitle());
+            if (prefix.isBlank()) return false;
+            return title.startsWith(prefix);
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     // ==================================================================
@@ -464,27 +496,49 @@ public class QuestManager {
         QuestStage stage = stages.get(stageIdx);
         if (!isStageSatisfied(player, quest, p, stage)) return false;
 
-        // 防重复：RegionRunner 每秒都会调用本方法，若该阶段已经处理过
-        // （尤其是抉择节点会停留在原地），直接返回，避免每秒刷屏 + 每秒弹 GUI。
-        if (p.isStageHandled(stageIdx)) return false;
+        // 防重复：RegionRunner 每秒都会调用本方法。
+        //
+        // ★ 两类阶段要分开处理：
+        //   - 普通阶段：handled 过就直接返回（原行为）。
+        //   - 抉择阶段：抉择靠"原地停留"等玩家选，玩家很可能先关掉界面、稍后再决定。
+        //     若在这里被 handled 拦死，界面就再也弹不出来了（只能退出重进，
+        //     因为 handledStages 不落盘、重连才清空）—— 这就是 v1.0.4 及之前
+        //     "卡在抉择做不了选择"的根因。
+        //     所以抉择阶段要放行，但**只放行重开界面那部分**，
+        //     下面的完成处理（打标记/发命令/播报）仍然只跑一次，
+        //     否则每秒轮询会重复播报、重复执行 commands_on_complete。
+        boolean choiceStage = stage.isChoice();
+        boolean alreadyHandled = p.isStageHandled(stageIdx);
 
-        // 阶段完成
-        p.markStageHandled(stageIdx);
-        p.markStageCompleted(stageIdx);
-        runCommands(player, stage.getCommandsOnComplete(), quest, stage, null, null);
-        runCommands(player, quest.getOnStageComplete(), quest, stage, null, null);
+        if (!choiceStage && alreadyHandled) return false;
 
-        if (!silent) {
-            Text.send(player, plugin.getConfig().getString("messages.prefix", "")
-                    + plugin.prefixed("stage_completed", "stage_name", stage.getName()));
+        if (!alreadyHandled) {
+            // 阶段完成（一次性）
+            p.markStageHandled(stageIdx);
+            p.markStageCompleted(stageIdx);
+            runCommands(player, stage.getCommandsOnComplete(), quest, stage, null, null);
+            runCommands(player, quest.getOnStageComplete(), quest, stage, null, null);
+
+            if (!silent) {
+                Text.send(player, plugin.getConfig().getString("messages.prefix", "")
+                        + plugin.prefixed("stage_completed", "stage_name", stage.getName()));
+            }
+            plugin.getPlayerDataStore().save(plugin.getPlayerData(player));
         }
 
         // 抉择节点：暂停在这里等玩家选
-        if (stage.isChoice()) {
-            // 记录已到抉择点，等待 ChoiceGui 回填
+        if (choiceStage) {
             p.setState(QuestState.ACTIVE);
-            plugin.getPlayerDataStore().save(plugin.getPlayerData(player));
-            plugin.getChoiceManager().openChoice(player, quest, stage);
+            // 节流：界面还开着就什么都不做；否则按冷却间隔重弹，
+            // 让「稍后再决定」这个承诺真正成立。
+            if (choiceGuiVisible(player)) return true;
+            long now = System.currentTimeMillis();
+            Long last = choiceReopenAt.get(player.getUniqueId());
+            int gap = plugin.getConfig().getInt("gui.choice_reopen_interval_sec", 5);
+            if (last == null || now - last >= gap * 1000L) {
+                choiceReopenAt.put(player.getUniqueId(), now);
+                plugin.getChoiceManager().openChoice(player, quest, stage);
+            }
             return true;
         }
 
@@ -823,7 +877,13 @@ public class QuestManager {
         if (quest.getFullId().equals(data.getTrackedQuest())) {
             data.setTrackedQuest(null);
         }
+        choiceReopenAt.remove(player.getUniqueId());
         plugin.getPlayerDataStore().save(data);
+    }
+
+    /** 玩家退出时清理抉择重弹节流记录，避免 UUID 条目无限累积。 */
+    public void forgetPlayer(java.util.UUID uuid) {
+        if (uuid != null) choiceReopenAt.remove(uuid);
     }
 
     // ==================================================================

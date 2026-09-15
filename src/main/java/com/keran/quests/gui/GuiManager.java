@@ -621,6 +621,28 @@ public class GuiManager implements Listener {
                     .lore("&7让 &f%kq_current% &7显示这个任务")
                     .action("track", quest.getFullId())
                     .build());
+
+            // ---- 「继续抉择」按钮 ----
+            //
+            // 抉择节点靠"原地停留"工作：阶段索引停在抉择那一格，等玩家点选后才推进。
+            // 但玩家一旦关掉抉择界面，就没有任何入口能重新打开它 —— 只能退出重进
+            // （因为 handledStages 不落盘，重连后内存标记清空才会重弹）。
+            // 这里在任务详情页给一个明确的入口，让"稍后再决定"这个承诺真的成立。
+            if (p != null && stageIdx < quest.getStageCount()) {
+                QuestStage cur = quest.getStages().get(stageIdx);
+                if (cur.isChoice() && !cur.getChoices().isEmpty()) {
+                    inv.setItem(47, new GuiItem(plugin, cfg("gui.icons.choice", "quest_ui_choice"),
+                            Material.PAPER)
+                            .name("&6[!] 继续抉择")
+                            .lore("&7你有尚未做出的选择：")
+                            .lore("&f" + com.keran.quests.util.Text.strip(cur.getChoiceTitle()))
+                            .lore("")
+                            .lore("&e点击打开抉择界面")
+                            .action("reopen_choice", quest.getFullId())
+                            .build());
+                }
+            }
+
             if (plugin.getConfig().getBoolean("gui.allow_abandon_in_gui", true)) {
                 if (quest.isAbandonAllowed()) {
                     GuiItem ab = new GuiItem(plugin, cfg("gui.icons.failed", "quest_ui_failed"), Material.BARRIER)
@@ -896,6 +918,7 @@ public class GuiManager implements Listener {
             case "accept" -> handleAccept(player, data);
             case "abandon" -> handleAbandon(player, data);
             case "track" -> handleTrack(player, data);
+            case "reopen_choice" -> handleReopenChoice(player, data);
             case "choice" -> handleChoice(player, data);
             default -> {
             }
@@ -919,6 +942,40 @@ public class GuiManager implements Listener {
                 }
             }
         });
+    }
+
+    /**
+     * 重新打开当前任务的抉择界面（任务详情页「继续抉择」按钮）。
+     *
+     * <p>为什么要清 handled 标记：{@code checkStageCompletion} 开头有防重复守卫
+     * {@code if (p.isStageHandled(stageIdx)) return false;}，一旦抉择界面弹过一次
+     * 就会打上标记，之后再也不会弹。这里把它清掉，保证点击必定能打开界面。
+     *
+     * <p>注意只清 handled、<b>不清 completed</b>：completed 表示"阶段条件已满足"，
+     * 是真实进度，清掉反而会让阶段状态显示回退。
+     */
+    private void handleReopenChoice(Player player, String fullId) {
+        Quest quest = plugin.getTreeLoader().resolveQuest(fullId);
+        if (quest == null) return;
+        PlayerData data = plugin.getPlayerData(player);
+        QuestProgress p = data.getProgress(quest.getFullId());
+        if (p == null || p.getState() != QuestState.ACTIVE) {
+            com.keran.quests.util.Text.send(player, "&c该任务不在进行中。");
+            return;
+        }
+        int idx = p.getStageIndex();
+        if (idx >= quest.getStageCount()) return;
+        QuestStage stage = quest.getStages().get(idx);
+        if (!stage.isChoice() || stage.getChoices().isEmpty()) {
+            // 配置改了 / 状态错位：给个明确反馈，别让玩家点了没反应
+            com.keran.quests.util.Text.send(player, "&c当前阶段不是抉择节点。");
+            openQuestDetail(player, fullId);
+            return;
+        }
+        p.unmarkStageHandled(idx);
+        data.markDirty();
+        plugin.getPlayerDataStore().save(data);
+        plugin.getChoiceManager().openChoice(player, quest, stage);
     }
 
     private void handleAbandon(Player player, String fullId) {

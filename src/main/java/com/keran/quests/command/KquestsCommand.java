@@ -2,6 +2,7 @@ package com.keran.quests.command;
 
 import com.keran.quests.KeranQuests;
 import com.keran.quests.config.model.Quest;
+import com.keran.quests.config.model.QuestStage;
 import com.keran.quests.config.model.enums.QuestType;
 import com.keran.quests.player.PlayerData;
 import com.keran.quests.player.QuestProgress;
@@ -223,6 +224,24 @@ public class KquestsCommand implements CommandExecutor, TabCompleter {
     //  stage —— 跳到指定阶段
     // ==================================================================
 
+    /**
+     * 跳到指定阶段。
+     *
+     * <p><b>语义</b>：把阶段索引直接设到 {@code idx}，清掉该索引及之后的旧进度，
+     * 然后从这一格重新开始正常走（{@code idx == stageCount} 表示"没有下一阶段了"，
+     * 直接完成任务）。注意它<b>不是</b>"标记该阶段已完成"，而是"站到该阶段的开头"；
+     * 目标阶段若没有 requirements，会立刻判定满足并推进，看起来像"一下就过了"。
+     *
+     * <p><b>抉择阶段的两点特殊处理</b>（v1.0.5 修）：
+     * <ol>
+     *   <li>跳到抉择节点本身时，先清掉该阶段的 handled 标记再弹界面。否则
+     *       {@code checkStageCompletion} 的防重复守卫会拦截，界面弹不出来，
+     *       玩家会卡死（只能退出重进）。</li>
+     *   <li>阻止"越过"尚未做出的抉择。抉择靠写入 {@code choice:xxx} 树状态来解锁分支
+     *       任务，越过去就等于静默断掉分支链（例如 main03 越过抉择后 main03a/b 永久无法接取）。
+     *       这种操作没有正当用途，直接拒绝并说明原因。</li>
+     * </ol>
+     */
     private void doStage(CommandSender sender, String[] args) {
         if (args.length < 4) return;
         Player p = Bukkit.getPlayerExact(args[1]);
@@ -242,7 +261,28 @@ public class KquestsCommand implements CommandExecutor, TabCompleter {
         if (prog == null || prog.getState() != com.keran.quests.config.model.enums.QuestState.ACTIVE) {
             return;
         }
+
+        // ---- 越界保护：不允许跨过未完成的抉择节点 ----
+        // 检查 [当前阶段, idx) 区间里是否存在"还没做出选择"的抉择阶段。
+        // 判据是该抉择组尚未写入 choice 值 —— 用 treeState 判断，与 ChoiceManager.choose 一致。
         int from = prog.getStageIndex();
+        for (int i = from; i < idx && i < q.getStageCount(); i++) {
+            QuestStage st = q.getStages().get(i);
+            if (!st.isChoice()) continue;
+            String group = st.getChoiceGroup() != null && !st.getChoiceGroup().isBlank()
+                    ? st.getChoiceGroup()
+                    : (q.getTreeId() + "_" + q.getId() + "_choice");
+            String made = data.getTreeState(q.getTreeId(), "choice:" + group);
+            if (made == null || made.isBlank()) {
+                text(sender, "&c跳过阶段被拒绝：阶段 " + i + "「" + strip(st.getName())
+                        + "」是尚未做出的抉择。");
+                text(sender, "&7抉择会写入 choice 状态并解锁分支任务，越过去会导致分支永久无法接取。");
+                text(sender, "&7请改用 &f/kquests stage " + p.getName() + " " + q.getFullId()
+                        + " " + i + " &7让玩家先做出选择。");
+                return;
+            }
+        }
+
         prog.clearFromStage(from);
         prog.setStageIndex(idx);
         data.markDirty();
@@ -250,6 +290,18 @@ public class KquestsCommand implements CommandExecutor, TabCompleter {
         if (idx >= q.getStageCount()) {
             plugin.getQuestManager().complete(p, q);
         } else {
+            QuestStage target = q.getStages().get(idx);
+            if (target.isChoice() && !target.getChoices().isEmpty()) {
+                // 跳到抉择节点：清 handled 后主动弹界面（不能只靠 checkStageCompletion，
+                // 它可能被残留的 handled 标记拦住）。
+                prog.unmarkStageHandled(idx);
+                data.markDirty();
+                plugin.getPlayerDataStore().save(data);
+                plugin.getChoiceManager().openChoice(p, q, target);
+                text(sender, "&a已把 " + p.getName() + " 置入抉择阶段 " + idx
+                        + "，并打开了抉择界面。");
+                return;
+            }
             plugin.getQuestManager().checkStageCompletion(p, q, prog, true);
             plugin.getPlayerDataStore().save(data);
         }
@@ -257,6 +309,16 @@ public class KquestsCommand implements CommandExecutor, TabCompleter {
             Text.send(sender, "&a已把 " + p.getName() + " 的 " + Text.strip(q.getName())
                     + " 置入阶段 " + idx + "。");
         }
+    }
+
+    /** 给发送者发一条带颜色的消息（控制台也适用）。 */
+    private void text(CommandSender sender, String msg) {
+        Text.send(sender, msg);
+    }
+
+    /** 去色（本地小工具，避免每处都写全限定名）。 */
+    private String strip(String s) {
+        return Text.strip(s);
     }
 
     // ==================================================================

@@ -118,6 +118,21 @@ public class QuestProgress {
         handledStages.add(stage);
     }
 
+    /**
+     * 撤销"已处理"标记。
+     *
+     * <p>用途：抉择节点弹过一次界面就会打上 handled，之后
+     * {@code checkStageCompletion} 的防重复守卫会永久拦截，导致界面再也弹不出来。
+     * 需要重新打开抉择界面时（任务详情页的「继续抉择」按钮、{@code /kq choice}
+     * 指令），先撤销该标记，保证界面必定能弹。
+     *
+     * <p>注意：这只影响"是否重复触发"的判定，不影响 {@link #getCompletedStages()}
+     * 所记录的真实进度。
+     */
+    public void unmarkStageHandled(int stage) {
+        handledStages.remove(stage);
+    }
+
     public java.util.Set<Integer> getHandledStages() {
         return handledStages;
     }

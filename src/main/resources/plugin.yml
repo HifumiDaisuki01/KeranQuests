@@ -19,7 +19,7 @@ softdepend:
 commands:
   kq:
     description: 打开任务菜单 / 管理命令
-    usage: /kq [list|track|abandon|reload|selftest|debug|help]
+    usage: /kq [list|track|abandon|choice|reload|selftest|debug|help]
     aliases: [keranquests, quests, quest]
     permission: kq.use
     permission-message: '&c你没有权限。'

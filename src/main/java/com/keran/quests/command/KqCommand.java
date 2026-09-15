@@ -2,7 +2,9 @@ package com.keran.quests.command;
 
 import com.keran.quests.KeranQuests;
 import com.keran.quests.config.model.Quest;
+import com.keran.quests.config.model.QuestStage;
 import com.keran.quests.config.model.QuestTree;
+import com.keran.quests.config.model.enums.QuestState;
 import com.keran.quests.config.model.enums.QuestType;
 import com.keran.quests.player.PlayerData;
 import com.keran.quests.player.QuestProgress;
@@ -80,6 +82,7 @@ public class KqCommand implements CommandExecutor, TabCompleter {
             }
             case "track" -> doTrack(sender, args);
             case "abandon" -> doAbandon(sender, args);
+            case "choice" -> doChoice(sender, args);
             case "reload" -> doReload(sender);
             case "selftest" -> doSelftest(sender);
             case "debug" -> doDebug(sender, args);
@@ -147,6 +150,85 @@ public class KqCommand implements CommandExecutor, TabCompleter {
         }
         String err = plugin.getQuestManager().abandon(p, q);
         if (err != null) Text.send(p, err);
+    }
+
+    /**
+     * /kq choice &lt;玩家&gt; [任务ID] —— 重新打开某任务的抉择界面。
+     *
+     * <p>存在意义：抉择节点靠"原地停留"工作，玩家关掉界面后插件没有入口再打开它，
+     * 只能退出重进（handledStages 不落盘，重连才清空）。这条指令给管理员一个在线补救手段。
+     *
+     * <p>不传任务ID时，对目标玩家所有"卡在未完成抉择节点"的任务逐个重开。
+     */
+    private void doChoice(CommandSender sender, String[] args) {
+        if (!checkAdmin(sender)) return;
+        if (args.length < 2) {
+            Text.send(sender, "&c用法：/kq choice <玩家> [任务ID]");
+            return;
+        }
+        Player target = Bukkit.getPlayerExact(args[1]);
+        if (target == null) {
+            Text.send(sender, "&c玩家不在线：" + args[1]);
+            return;
+        }
+
+        List<Quest> targets = new ArrayList<>();
+        if (args.length >= 3) {
+            Quest q = plugin.getTreeLoader().resolveQuest(args[2]);
+            if (q == null) {
+                Text.send(sender, "&c任务不存在：" + args[2]);
+                return;
+            }
+            targets.add(q);
+        } else {
+            // 不指定任务：找出所有正卡在抉择节点的进行中任务
+            PlayerData data = plugin.getPlayerData(target);
+            for (Quest q : plugin.getTreeLoader().getAllQuests()) {
+                QuestProgress p = data.getProgress(q.getFullId());
+                if (p == null || p.getState() != QuestState.ACTIVE) continue;
+                int idx = p.getStageIndex();
+                if (idx >= q.getStageCount()) continue;
+                QuestStage st = q.getStages().get(idx);
+                if (st.isChoice() && !st.getChoices().isEmpty()) targets.add(q);
+            }
+            if (targets.isEmpty()) {
+                Text.send(sender, "&7" + target.getName() + " 当前没有待抉择的任务。");
+                return;
+            }
+        }
+
+        int opened = 0;
+        for (Quest q : targets) {
+            if (reopenChoice(target, q)) opened++;
+        }
+        if (opened == 0) {
+            Text.send(sender, "&c没有可打开的抉择界面（任务不在进行中，或当前阶段不是抉择节点）。");
+        } else if (sender != target) {
+            Text.send(sender, "&a已为 " + target.getName() + " 打开抉择界面（" + opened + " 个）。");
+        }
+    }
+
+    /**
+     * 重新打开某任务的抉择界面，成功返回 true。
+     *
+     * <p>清 handled 标记是关键：{@code checkStageCompletion} 开头的防重复守卫
+     * {@code if (p.isStageHandled(stageIdx)) return false;} 会永久拦截已完成处理的阶段，
+     * 不清掉的话界面弹不出来。completed 标记不动 —— 那是真实进度。
+     */
+    private boolean reopenChoice(Player player, Quest quest) {
+        PlayerData data = plugin.getPlayerData(player);
+        QuestProgress p = data.getProgress(quest.getFullId());
+        if (p == null || p.getState() != QuestState.ACTIVE) return false;
+        int idx = p.getStageIndex();
+        if (idx < 0 || idx >= quest.getStageCount()) return false;
+        QuestStage stage = quest.getStages().get(idx);
+        if (!stage.isChoice() || stage.getChoices().isEmpty()) return false;
+
+        p.unmarkStageHandled(idx);
+        data.markDirty();
+        plugin.getPlayerDataStore().save(data);
+        plugin.getChoiceManager().openChoice(player, quest, stage);
+        return true;
     }
 
     private void doReload(CommandSender sender) {
@@ -334,6 +416,25 @@ public class KqCommand implements CommandExecutor, TabCompleter {
             QuestProgress p = e.getValue();
             Text.sendRaw(sender, "  &7- &f" + e.getKey() + " &8| &f" + p.getState()
                     + " &8| 阶段 &f" + p.getStageIndex());
+
+            // 阶段标记是本插件最容易出"卡死"的地方，必须能看到：
+            //   doneStages    = 阶段条件已满足（落盘）
+            //   handledStages = 已触发过完成处理 / 已弹过抉择界面（不落盘，重连即清空）
+            //
+            // 注：v1.0.5 起抉择阶段不再被 handled 拦死（会自动重弹界面），
+            // 所以 isHandled 为 true 对抉择节点来说是正常状态，不再代表卡死。
+            Quest q = plugin.getTreeLoader().resolveQuest(e.getKey());
+            if (q != null) {
+                Text.sendRaw(sender, "      已完成阶段：&f" + sortedSet(p.getCompletedStages())
+                        + " &7已处理阶段：&f" + sortedSet(p.getHandledStages()));
+                int si = p.getStageIndex();
+                if (p.getState() == QuestState.ACTIVE && si < q.getStageCount()
+                        && q.getStages().get(si).isChoice()) {
+                    Text.sendRaw(sender, "      &e当前阶段是抉择节点，等待玩家做出选择。"
+                            + " &7界面会自动重开；也可用 /kq choice "
+                            + target.getName() + " 立即重开。");
+                }
+            }
         }
         if (!data.getAllTreeState().isEmpty()) {
             Text.sendRaw(sender, " &7树状态：");
@@ -349,6 +450,17 @@ public class KqCommand implements CommandExecutor, TabCompleter {
                         + com.keran.quests.util.TimeUtil.format((int) Math.max(0, left / 1000)));
             }
         }
+    }
+
+    /**
+     * 把阶段索引集合排成 "0,2,5" 这样的字符串；空集合返回 "无"。
+     *
+     * <p>用于 {@code /kq debug} 输出阶段标记。之所以要排序，是因为底层用的是
+     * HashSet，直接 toString 的顺序不稳定，每次看都不一样会干扰排查。
+     */
+    private String sortedSet(java.util.Set<Integer> set) {
+        if (set == null || set.isEmpty()) return "无";
+        return set.stream().sorted().map(String::valueOf).collect(Collectors.joining(","));
     }
 
     /**
@@ -413,6 +525,7 @@ public class KqCommand implements CommandExecutor, TabCompleter {
         Text.sendRaw(sender, " &f/" + label + " list &7- 同上（显式）");
         Text.sendRaw(sender, " &f/" + label + " track [任务ID] &7- 追踪任务（影响 %kq_current%）");
         Text.sendRaw(sender, " &f/" + label + " abandon [任务ID] &7- 放弃任务");
+        Text.sendRaw(sender, " &f/" + label + " choice <玩家> [任务ID] &7- 重开抉择界面");
         Text.sendRaw(sender, " &f/" + label + " reload &7- 重载配置");
         Text.sendRaw(sender, " &f/" + label + " selftest &7- 环境自检");
         Text.sendRaw(sender, " &f/" + label + " debug <玩家> &7- 查看档案");
@@ -428,7 +541,8 @@ public class KqCommand implements CommandExecutor, TabCompleter {
                                       @NotNull String alias, @NotNull String[] args) {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
-            out.addAll(Arrays.asList("list", "track", "abandon", "reload", "selftest", "debug", "icon", "help"));
+            out.addAll(Arrays.asList("list", "track", "abandon", "choice", "reload",
+                    "selftest", "debug", "icon", "help"));
         } else if (args.length == 2) {
             String sub = args[0].toLowerCase();
             if (sub.equals("track") || sub.equals("abandon")) {
@@ -440,8 +554,12 @@ public class KqCommand implements CommandExecutor, TabCompleter {
                 for (QuestTree t : plugin.getTreeLoader().getTrees()) {
                     for (Quest q : t.getQuests()) out.add(q.getFullId());
                 }
-            } else if (sub.equals("debug") || sub.equals("gui")) {
+            } else if (sub.equals("debug") || sub.equals("gui") || sub.equals("choice")) {
                 Bukkit.getOnlinePlayers().forEach(p -> out.add(p.getName()));
+            }
+        } else if (args.length == 3 && args[0].equalsIgnoreCase("choice")) {
+            for (QuestTree t : plugin.getTreeLoader().getTrees()) {
+                for (Quest q : t.getQuests()) out.add(q.getFullId());
             }
         }
         String last = args[args.length - 1].toLowerCase();
