@@ -352,3 +352,147 @@ TPS: 18.83 18.76 18.78
 
 ---
 
+
+---
+
+# 第三轮 · 玩家实测反馈修复
+
+> 玩家实测反馈 4 个问题，全部核实并修复。其中 2 个是**我造成的严重问题**。
+
+## 一、Oraxen CMD 段位冲突（严重 · 我造成的）
+
+### 现象
+玩家报告："任务 UI 图标错误的在我的材料上生效了，还给我材料原材质弄没了"
+
+### 根因
+任务 UI 材质占用 `custom_model_data: 1000-1023`，
+而服务器的 `环渡客-材料.yml` 等文件**同样使用 1000 起**：
+
+```
+CMD 1000: 46 个材料物品共用
+CMD 1001: 21 个物品共用
+CMD 1002: 14 个物品共用
+...
+```
+
+我在这些文件的注释里写过："CMD 只在同一 material 内需要唯一，本文件 24 件全部使用 PAPER，
+而服务器现有 5 个物品文件均未使用 PAPER，因此 1000 起不会冲突。"
+
+**这个判断是错的。** Oraxen 的 CMD 冲突**不能靠 material 隔离**——
+即使 UI 是 PAPER、材料是 IRON_INGOT，同一 CMD 值依然会互相污染贴图。
+
+### 修复
+UI 材质整体平移到 `9000-9023`，并验证与既有物品**零冲突**。
+同时把文件头的错误注释改成明确警告，写清禁用段位与该结论。
+
+### 附带发现（与插件无关，但影响你后续做材质）
+你的材料文件内部本身就存在大量 CMD 共用：**12 个 CMD 值被多个物品共用**，
+其中 CMD 1000 被 46 个物品抢占。这意味着这些物品**只能显示同一个贴图**。
+如果这不是有意为之，需要给它们分配独立的 CMD。
+
+---
+
+## 二、GUI 进入二层后点击全部失灵 + 物品能被拿走（严重 · 我造成的）
+
+### 现象
+"点击任务树能进去，但进入任务列表后点啥都没反应，物品能直接拿出来"
+
+### 根因：关闭事件时序竞态
+
+```java
+// openQuestList 里
+currentView.put(player.getUniqueId(), View.QUEST_LIST);  // ① 先登记新界面
+player.openInventory(inv);                               // ② 再打开 → 触发旧界面的 Close 事件
+```
+
+`openInventory` 切换界面时，服务端会派发**旧界面**的 `InventoryCloseEvent`：
+
+```java
+// onClose 里（原实现）
+currentView.remove(id);   // ← 把①刚写入的记录擦掉了！
+```
+
+于是新界面开着，`currentView` 却是 `null`。而 `onClick` 首行：
+
+```java
+View view = currentView.get(player.getUniqueId());
+if (view == null) return;        // ← 直接返回
+event.setCancelled(true);        // ← 根本没执行到
+```
+
+→ 既点不动，事件也没被取消，**物品就能被拖走**。
+
+**为什么任务树那一层正常**：它是第一个界面，打开时没有旧界面需要关闭，
+不触发 `onClose`，所以记录没被擦掉。
+
+### 修复
+新增 `openGui()` 作为唯一出口，打开前登记一次「应忽略的关闭」：
+
+```java
+private void openGui(Player player, Inventory inv) {
+    suppressNextClose(player);      // 登记
+    player.openInventory(inv);
+}
+```
+
+`onClose` 消费该标记后直接返回，不清理 `currentView`。
+标记带 **1 秒有效期**，防止 `openInventory` 异常导致标记残留、误吞后续真正的关闭。
+玩家下线时 `forget()` 清理全部 GUI 状态（避免内存堆积）。
+
+---
+
+## 三、GUI 标题占位符不生效
+
+### 现象
+标题显示为 `任务列表 · {tree}`（截图可见）
+
+### 根因
+内置默认配置写的是 `{tree}` / `{quest}`，而代码传入的变量名是
+`tree_name` / `quest_name`。`Text.replace` 只做**精确匹配**，
+名字对不上就原样输出花括号。
+
+| 配置键 | 配置里的写法 | 代码支持的变量 | 结果 |
+|---|---|---|---|
+| `title_quest_list` | `{tree}` | `{tree_name}` | 不替换 |
+| `title_quest_detail` | `{quest}` | `{quest_name}` | 不替换 |
+| `title_choice` | `{title}` | `{title}` | 正常 |
+
+### 修复
+短名与长名**同时替换**，两种写法都生效；
+并在 `config.yml` 注释里列明每个标题支持的占位符。
+
+---
+
+## 四、TPS 19.45 是否插件导致 → 已排除
+
+### 对照实验
+
+| 状态 | TPS | 卡顿次数 |
+|---|---|---|
+| 装 KeranQuests | 19.6 ~ 19.9 | 3 |
+| **卸掉 KeranQuests** | **20.0 20.0 19.99** | 0 |
+
+差值仅 **0.4 TPS**。
+
+### 关键证据：宿主机 CPU 争抢
+服务器**停止运行**时（Java 进程已退出）：
+
+```
+CPU: 100% 空闲，内存 2.8G 可用
+load average: 1.70, 3.96, 8.22    ← 4 核机器，空载却有 1.7 负载
+```
+
+一台完全空闲的 4 核机器不可能有 1.7 的负载均值。这说明
+**这台 VPS 的 CPU 被同一宿主机上的邻居大量抢占**。
+
+叠加 4 核跑 Paper 1.20.1 + 20 多个插件（CMI / FAWE / Citizens / MM / Oraxen / CrackShot…），
+19.6 TPS 属于正常表现，**与 KeranQuests 无关**。
+
+插件自身的调度开销很小：仅 2 个周期任务
+（`RegionRunner` 每 20 tick 一次 + 存档每 60 秒 flush 一次），
+且区域查询带坐标缓存。
+
+### 建议
+若要提升 TPS，方向是**减少插件总量**或**升级机器**（CPU 是瓶颈，内存也只剩 280M 空闲），
+而不是动 KeranQuests。
+
