@@ -1,0 +1,189 @@
+# =============================================================================
+#  「新手入门」—— 任务树示例（另一棵树，演示"多任务 + 前置组合"）
+# =============================================================================
+#  这棵树演示的重点：
+#    · 多个任务共享同一个前置（main01）
+#    · 支线之间彼此独立、可以并行做
+#    · 被别的树引用（烛龙探秘的前置就用了本树的 3 个任务）
+#
+#  本文件 → 树 ID 为 "tutorial"
+#  改完执行 /kq reload 生效
+#  完整字段说明见 zhulong.yml（那份注释最全）
+# =============================================================================
+
+id: tutorial
+name: '&a新手入门'
+description: '&7初到废土，先学会活下去。'
+icon: 'quest_ui_main'
+order: 1                          # 排第 1，比烛龙探秘（order: 2）靠前
+enabled: true
+
+main_quest_limit: 1
+side_quest_limit: 3
+
+quests:
+
+  # ===========================================================================
+  #  main01 —— 教学任务：进入区域 + 和 NPC 说话
+  #  【演示：region_enter 与 region_stay 的区别 / SEQUENTIAL 阶段可见性】
+  # ===========================================================================
+  main01:
+    name: '&a落脚'
+    type: MAIN
+    weight: 100
+    icon: 'quest_ui_main'
+    stage_visibility: SEQUENTIAL   # 做完一个阶段才显示下一个（有引导感）
+
+    stages:
+      # ---- 阶段一：进入区域即完成，不用停留 ----
+      - id: arrive
+        name: '&f抵达新手营地'
+        mode: ALL
+        requirements:
+          # region_enter = 一进区域就算完成
+          # 对比 region_stay = 要在区域里待满 N 秒（见 zhulong.yml）
+          - type: region_enter
+            region: 'example_tutorial_camp'
+            world: 'world'
+            display: '进入新手营地'
+            description: '跟着路标走到营地中央'
+        commands_on_complete:
+          - 'tellraw {player} {"text":"[向导] 营地还算安全，先熟悉一下这里。","color":"gray"}'
+
+      # ---- 阶段二：和 NPC 对话 ----
+      - id: talk_guide
+        name: '&f与向导对话'
+        mode: ALL
+        requirements:
+          - type: npc_talk
+            npc: '示例向导'
+            display: '与向导对话'
+
+    on_start:
+      - 'title {player} title {"text":"新手入门","color":"green"}'
+      - 'title {player} subtitle {"text":"跟着任务指引走","color":"gray"}'
+
+    on_complete:
+      - 'tellraw {player} {"text":"[向导] 你算是入门了。去找接头人吧。","color":"green"}'
+
+    rewards:
+      money: 500
+      exp: 100
+      # 【发物品】原版物品直接写 minecraft: 开头
+      commands:
+        - 'give {player} minecraft:bread 8'
+
+  # ===========================================================================
+  #  下面三个支线任务 —— 演示"同一前置、并行做"
+  #  它们都是 main01 做完就能接，彼此之间互不影响
+  #  ★ 烛龙探秘树的前置就是"这三个里完成任意 2 个"
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  #  接头 —— 最简单：只和 NPC 说句话
+  # ---------------------------------------------------------------------------
+  jietou:
+    name: '&a接头'
+    type: SIDE
+    weight: 60
+    icon: 'quest_ui_side'
+    stage_visibility: FULL
+
+    # 【任务级前置】写法与整树前置完全一致，只是只影响这一个任务
+    prerequisites:
+      quest_completed_all:
+        - 'tutorial:main01'
+
+    stages:
+      - id: find
+        name: '&f找到接头人'
+        mode: ALL
+        requirements:
+          - type: npc_talk
+            npc: '示例接头人'
+            display: '与接头人对话'
+
+    on_complete:
+      - 'tellraw {player} {"text":"[接头人] 暗号对上了。","color":"yellow"}'
+
+    rewards:
+      money: 800
+      exp: 80
+
+  # ---------------------------------------------------------------------------
+  #  相逢 —— 打怪 + 对话（两个条件都要满足）
+  # ---------------------------------------------------------------------------
+  xiangfeng:
+    name: '&a相逢'
+    type: SIDE
+    weight: 60
+    icon: 'quest_ui_side'
+    stage_visibility: FULL
+
+    prerequisites:
+      quest_completed_all:
+        - 'tutorial:main01'
+
+    stages:
+      - id: rescue
+        name: '&f救下遇险者'
+        mode: ALL                 # 两个条件都要满足
+        requirements:
+          - type: mm_kill
+            mobs: ['example_wanderer']
+            count: 5
+            display: '击杀示例游荡者'
+            description: '救下被围困的幸存者'
+          - type: npc_talk
+            npc: '示例幸存者'
+            display: '与幸存者对话'
+
+    on_complete:
+      - 'tellraw {player} {"text":"[幸存者] 谢谢你……这个给你。","color":"white"}'
+
+    rewards:
+      money: 1000
+      exp: 120
+
+  # ---------------------------------------------------------------------------
+  #  第一桶金 —— 收集 + 交给 NPC（两阶段）
+  # ---------------------------------------------------------------------------
+  diyitongjin:
+    name: '&a第一桶金'
+    type: SIDE
+    weight: 60
+    icon: 'quest_ui_side'
+    stage_visibility: FULL
+
+    prerequisites:
+      quest_completed_all:
+        - 'tutorial:main01'
+
+    stages:
+      # ---- 阶段一：凑够物品（要交出去，所以 consume: true）----
+      - id: collect
+        name: '&f攒够第一笔钱'
+        mode: ALL
+        requirements:
+          - type: oraxen_item
+            item: 'scrap_metal'    # ★ 这是服务器上真实存在的物品，可作参考写法
+            count: 16
+            consume: true          # 交给商贩，所以要扣掉
+            display: '上交废金属'
+            description: '从废墟里捡够 16 个废金属'
+
+      # ---- 阶段二：找商贩交货 ----
+      - id: trade
+        name: '&f交给商贩'
+        mode: ALL
+        requirements:
+          - type: npc_talk
+            npc: '示例商贩'
+            display: '与商贩交易'
+
+    on_complete:
+      - 'tellraw {player} {"text":"[商贩] 成色不错，成交。","color":"gold"}'
+
+    rewards:
+      money: 2000
+      exp: 150

@@ -1,0 +1,910 @@
+package com.keran.quests.gui;
+
+import com.keran.quests.KeranQuests;
+import com.keran.quests.config.model.Quest;
+import com.keran.quests.config.model.QuestStage;
+import com.keran.quests.config.model.QuestTree;
+import com.keran.quests.config.model.Requirement;
+import com.keran.quests.config.model.enums.QuestState;
+import com.keran.quests.config.model.enums.QuestType;
+import com.keran.quests.player.PlayerData;
+import com.keran.quests.player.QuestProgress;
+import com.keran.quests.runtime.QuestManager;
+import org.bukkit.Bukkit;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.persistence.PersistentDataType;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * GUI 主控 —— 三个界面 + 抉择界面。
+ *
+ * <h3>界面层级</h3>
+ * <pre>
+ *   任务树列表  →  任务树详情  →  任务详情  →  抉择
+ * </pre>
+ */
+public class GuiManager implements Listener {
+
+    private final KeranQuests plugin;
+
+    /** 玩家当前打开的界面类型 */
+    private final Map<UUID, View> currentView = new HashMap<>();
+    /** 玩家在每个界面的翻页状态 */
+    private final Map<UUID, Integer> pageState = new HashMap<>();
+
+    public GuiManager(KeranQuests plugin) {
+        this.plugin = plugin;
+    }
+
+    /** 视图类型。 */
+    public enum View {
+        TREE_LIST,      // 任务树列表
+        QUEST_LIST,     // 某树的任务列表
+        QUEST_DETAIL,   // 单任务详情
+        CHOICE          // 抉择
+    }
+
+    // ==================================================================
+    //  ① 任务树列表
+    // ==================================================================
+
+    public void openTreeList(Player player, int page) {
+        List<QuestTree> trees = new ArrayList<>(plugin.getTreeLoader().getTrees());
+        trees.removeIf(t -> !t.isEnabled());
+
+        int size = 54;
+        String title = plugin.getConfig().getString("gui.title_tree_list", "任务总览");
+        Inventory inv = Bukkit.createInventory(null, size, com.keran.quests.util.Text.color(title));
+
+        // 背景
+        fillBackground(inv);
+
+        int perPage = 21;
+        int totalPages = Math.max(1, (int) Math.ceil(trees.size() / (double) perPage));
+        int p = Math.max(0, Math.min(page, totalPages - 1));
+        int start = p * perPage;
+
+        // 按钮位置：3 行 x 7 列（跳过边框）
+        int[] slots = {
+                10, 11, 12, 13, 14, 15, 16,
+                19, 20, 21, 22, 23, 24, 25,
+                28, 29, 30, 31, 32, 33, 34
+        };
+
+        PlayerData data = plugin.getPlayerData(player);
+        for (int i = 0; i < perPage && start + i < trees.size(); i++) {
+            QuestTree tree = trees.get(start + i);
+            inv.setItem(slots[i], buildTreeNode(player, data, tree));
+        }
+
+        // 翻页
+        if (totalPages > 1) {
+            if (p > 0) {
+                inv.setItem(45, new GuiItem(plugin, cfg("gui.icons.prev", "quest_ui_prev"), Material.ARROW)
+                        .name("&e← 上一页")
+                        .action("page", String.valueOf(p - 1))
+                        .build());
+            }
+            inv.setItem(49, new GuiItem(plugin, cfg("gui.icons.bg", "quest_ui_bg"), Material.GRAY_STAINED_GLASS_PANE)
+                    .name("&7第 &f" + (p + 1) + "&7/&f" + totalPages + " &7页")
+                    .build());
+            if (p < totalPages - 1) {
+                inv.setItem(53, new GuiItem(plugin, cfg("gui.icons.next", "quest_ui_next"), Material.ARROW)
+                        .name("&e下一页 →")
+                        .action("page", String.valueOf(p + 1))
+                        .build());
+            }
+        }
+
+        currentView.put(player.getUniqueId(), View.TREE_LIST);
+        pageState.put(player.getUniqueId(), p);
+        player.openInventory(inv);
+    }
+
+    /** 构建任务树图标。 */
+    private ItemStack buildTreeNode(Player player, PlayerData data, QuestTree tree) {
+        int mainDone = plugin.getQuestManager().countCompleted(data, tree, QuestType.MAIN);
+        int mainTotal = tree.countMainTotal();
+        int sideDone = plugin.getQuestManager().countCompleted(data, tree, QuestType.SIDE);
+        int sideTotal = tree.countSideTotal();
+
+        QuestManager.UnlockStatus treeStatus = getTreeUnlockStatus(player, tree);
+        boolean hasAvailable = hasAvailableQuest(player, tree);
+        String stateText = plugin.getQuestManager().getTreeStateText(data, tree);
+
+        // 图标：根据状态选择
+        String iconId = tree.getIcon();
+        Material fallback = Material.BOOK;
+        if (treeStatus == QuestManager.UnlockStatus.LOCKED_HIDDEN) {
+            iconId = cfg("gui.icons.unknown", "quest_ui_unknown");
+            fallback = Material.GRAY_DYE;
+        } else if (treeStatus == QuestManager.UnlockStatus.LOCKED_KNOWN) {
+            iconId = cfg("gui.icons.locked", "quest_ui_locked");
+            fallback = Material.GRAY_DYE;
+        } else if ("已完成".equals(stateText)) {
+            iconId = cfg("gui.icons.done", "quest_ui_done");
+            fallback = Material.LIME_DYE;
+        } else if (hasAvailable) {
+            iconId = cfg("gui.icons.available", "quest_ui_available");
+            fallback = Material.YELLOW_DYE;
+        }
+
+        List<String> lore = new ArrayList<>();
+        lore.add("&8──────────────");
+
+        // 未解锁隐藏：不显示描述
+        if (treeStatus == QuestManager.UnlockStatus.LOCKED_HIDDEN) {
+            lore.add("&8未知的任务线");
+            lore.add("");
+            lore.add("&7完成更多任务以解锁…");
+        } else {
+            for (String line : tree.getDescription().split("\n")) {
+                lore.add("&7" + line);
+            }
+            lore.add("");
+            lore.add("&7主线进度：&a" + mainDone + "&7/&f" + mainTotal);
+            lore.add("&7支线进度：&a" + sideDone + "&7/&f" + sideTotal);
+            lore.add("");
+
+            if (treeStatus == QuestManager.UnlockStatus.LOCKED_KNOWN) {
+                lore.add("&c[✖] 未解锁");
+                lore.addAll(describeMissingPrerequisites(player, tree));
+            } else {
+                if (hasAvailable) {
+                    lore.add("&e[▶] 有任务可以接取");
+                }
+                if (!"已完成".equals(stateText) && !"未开始".equals(stateText)) {
+                    lore.add("&7状态：&f" + stateText);
+                }
+                lore.add("");
+                lore.add("&7点击查看详情");
+            }
+        }
+
+        String name = treeStatus == QuestManager.UnlockStatus.LOCKED_HIDDEN
+                ? "&8？？？"
+                : tree.getName();
+
+        return new GuiItem(plugin, iconId, fallback)
+                .name(name)
+                .lore(lore)
+                .action("open_tree", tree.getId())
+                .build();
+    }
+
+    /** 判定整棵树的解锁状态。 */
+    private QuestManager.UnlockStatus getTreeUnlockStatus(Player player, QuestTree tree) {
+        // 树无前置 → 解锁
+        if (tree.getPrerequisites() == null || tree.getPrerequisites().isEmpty()) {
+            return QuestManager.UnlockStatus.UNLOCKED;
+        }
+        if (plugin.getQuestManager().checkPrerequisites(player, tree.getPrerequisites())) {
+            return QuestManager.UnlockStatus.UNLOCKED;
+        }
+        return QuestManager.UnlockStatus.LOCKED_KNOWN;
+    }
+
+    private boolean hasAvailableQuest(Player player, QuestTree tree) {
+        for (Quest q : tree.getQuests()) {
+            PlayerData data = plugin.getPlayerData(player);
+            QuestProgress p = data.getProgress(q.getFullId());
+            if (p != null && p.getState() == QuestState.ACTIVE) continue;
+            if (plugin.getQuestManager().canAccept(player, q) == null) return true;
+        }
+        return false;
+    }
+
+    /** 描述树缺少的前置（用于 lore）。 */
+    private List<String> describeMissingPrerequisites(Player player, QuestTree tree) {
+        List<String> out = new ArrayList<>();
+        if (tree.getPrerequisites() == null) return out;
+        PlayerData data = plugin.getPlayerData(player);
+
+        for (String ref : tree.getPrerequisites().getQuestCompletedAll()) {
+            Quest q = plugin.getTreeLoader().resolveQuest(ref);
+            String full = q == null ? ref : q.getFullId();
+            if (!data.isCompleted(full)) {
+                out.add("&7需完成：&f" + (q == null ? ref : com.keran.quests.util.Text.strip(q.getName())));
+            }
+        }
+        for (String ref : tree.getPrerequisites().getTreeCompletedAll()) {
+            if (!plugin.getQuestManager().isTreeCompleted(data, ref)) {
+                QuestTree t = plugin.getTreeLoader().getTree(ref);
+                out.add("&7需完成：&f" + (t == null ? ref : com.keran.quests.util.Text.strip(t.getName())));
+            }
+        }
+        List<String> anyQ = tree.getPrerequisites().getQuestCompletedAny();
+        if (!anyQ.isEmpty()) {
+            int need = tree.getPrerequisites().getQuestCompletedAnyNeed();
+            int done = 0;
+            List<String> names = new ArrayList<>();
+            for (String ref : anyQ) {
+                Quest q = plugin.getTreeLoader().resolveQuest(ref);
+                String full = q == null ? ref : q.getFullId();
+                String nm = q == null ? ref : com.keran.quests.util.Text.strip(q.getName());
+                names.add(nm);
+                if (data.isCompleted(full)) done++;
+            }
+            if (done < need) {
+                out.add("&7需完成以下任意 &f" + need + " &7个（当前 &a" + done + "&7）：");
+                out.add("&8  " + String.join(" &7/ &8", names));
+            }
+        }
+        return out;
+    }
+
+    // ==================================================================
+    //  ② 任务树详情
+    // ==================================================================
+
+    public void openQuestList(Player player, String treeId, int page) {
+        QuestTree tree = plugin.getTreeLoader().getTree(treeId);
+        if (tree == null) {
+            player.closeInventory();
+            return;
+        }
+        PlayerData data = plugin.getPlayerData(player);
+        int mainDone = plugin.getQuestManager().countCompleted(data, tree, QuestType.MAIN);
+        int sideDone = plugin.getQuestManager().countCompleted(data, tree, QuestType.SIDE);
+
+        String titleTpl = plugin.getConfig().getString("gui.title_quest_list",
+                "{tree_name} · 主线 {main}/{main_total} · 支线 {side}/{side_total}");
+        String title = com.keran.quests.util.Text.replace(titleTpl,
+                "tree_name", com.keran.quests.util.Text.strip(tree.getName()),
+                "main", String.valueOf(mainDone),
+                "main_total", String.valueOf(tree.countMainTotal()),
+                "side", String.valueOf(sideDone),
+                "side_total", String.valueOf(tree.countSideTotal()));
+
+        Inventory inv = Bukkit.createInventory(null, 54, com.keran.quests.util.Text.color(title));
+        fillBackground(inv);
+
+        List<Quest> quests = tree.getQuestsByWeight();
+        int perPage = 21;
+        int totalPages = Math.max(1, (int) Math.ceil(quests.size() / (double) perPage));
+        int p = Math.max(0, Math.min(page, totalPages - 1));
+        int start = p * perPage;
+
+        int[] slots = {
+                10, 11, 12, 13, 14, 15, 16,
+                19, 20, 21, 22, 23, 24, 25,
+                28, 29, 30, 31, 32, 33, 34
+        };
+
+        for (int i = 0; i < perPage && start + i < quests.size(); i++) {
+            Quest q = quests.get(start + i);
+            inv.setItem(slots[i], buildQuestNode(player, data, q));
+        }
+
+        // 返回
+        inv.setItem(45, new GuiItem(plugin, cfg("gui.icons.back", "quest_ui_back"), Material.ARROW)
+                .name("&e← 返回任务总览")
+                .action("back_tree_list", "")
+                .build());
+        // 关闭
+        inv.setItem(49, new GuiItem(plugin, cfg("gui.icons.close", "quest_ui_close"), Material.BARRIER)
+                .name("&c关闭")
+                .action("close", "")
+                .build());
+
+        if (totalPages > 1) {
+            if (p > 0) {
+                inv.setItem(48, new GuiItem(plugin, cfg("gui.icons.prev", "quest_ui_prev"), Material.ARROW)
+                        .name("&e← 上一页")
+                        .action("page_tree", treeId + "|" + (p - 1))
+                        .build());
+            }
+            if (p < totalPages - 1) {
+                inv.setItem(50, new GuiItem(plugin, cfg("gui.icons.next", "quest_ui_next"), Material.ARROW)
+                        .name("&e下一页 →")
+                        .action("page_tree", treeId + "|" + (p + 1))
+                        .build());
+            }
+        }
+
+        currentView.put(player.getUniqueId(), View.QUEST_LIST);
+        pageState.put(player.getUniqueId(), p);
+        player.openInventory(inv);
+    }
+
+    /** 构建单个任务图标。 */
+    private ItemStack buildQuestNode(Player player, PlayerData data, Quest quest) {
+        QuestProgress progress = data.getProgress(quest.getFullId());
+        QuestState state = progress == null ? QuestState.LOCKED : progress.getState();
+        QuestManager.UnlockStatus unlock = plugin.getQuestManager().getUnlockStatus(player, quest);
+        int cd = data.getCooldownRemaining(quest.getFullId(), "COOLDOWN");
+        int failCd = data.getCooldownRemaining(quest.getFullId(), "FAIL_LOCK");
+
+        // 决定图标
+        String iconId;
+        Material fallback;
+        String stateLabel;
+
+        if (state == QuestState.COMPLETED) {
+            iconId = cfg("gui.icons.done", "quest_ui_done");
+            fallback = Material.LIME_DYE;
+            stateLabel = "&a[✔] 已完成";
+        } else if (state == QuestState.ACTIVE) {
+            iconId = cfg("gui.icons.active", "quest_ui_active");
+            fallback = Material.YELLOW_DYE;
+            stateLabel = "&e[▶] 进行中";
+        } else if (state == QuestState.FAILED) {
+            iconId = cfg("gui.icons.failed", "quest_ui_failed");
+            fallback = Material.RED_DYE;
+            stateLabel = "&c[✗] 已失败";
+        } else if (cd > 0 || failCd > 0) {
+            iconId = cfg("gui.icons.cooldown", "quest_ui_cooldown");
+            fallback = Material.CLOCK;
+            stateLabel = "&7[⌛] 冷却中 &f" + com.keran.quests.util.TimeUtil.format(Math.max(cd, failCd));
+        } else if (unlock == QuestManager.UnlockStatus.LOCKED_HIDDEN) {
+            iconId = cfg("gui.icons.unknown", "quest_ui_unknown");
+            fallback = Material.GRAY_DYE;
+            stateLabel = "&8？？？";
+        } else if (unlock == QuestManager.UnlockStatus.LOCKED_KNOWN) {
+            iconId = cfg("gui.icons.locked", "quest_ui_locked");
+            fallback = Material.GRAY_DYE;
+            stateLabel = "&c[✖] 未解锁";
+        } else {
+            iconId = cfg("gui.icons.available", "quest_ui_available");
+            fallback = Material.PAPER;
+            stateLabel = "&e[❗] 可接取";
+        }
+
+        boolean hidden = unlock == QuestManager.UnlockStatus.LOCKED_HIDDEN && state == QuestState.LOCKED;
+
+        List<String> lore = new ArrayList<>();
+        lore.add("&8──────────────");
+        lore.add("&7类型：" + (quest.getType() == QuestType.MAIN ? "&6主线" : "&b支线"));
+        if (!hidden) {
+            lore.add("&7权重：&f" + quest.getWeight());
+        }
+        lore.add("");
+        lore.add(stateLabel);
+
+        if (!hidden) {
+            if (state == QuestState.ACTIVE && progress != null) {
+                lore.add("&7阶段：&f" + (progress.getStageIndex() + 1) + "&7/&f" + quest.getStageCount());
+                if (quest.getTimeLimit() > 0 && progress.getStartedAt() > 0) {
+                    long elapsed = (System.currentTimeMillis() - progress.getStartedAt()) / 1000;
+                    int remain = (int) Math.max(0, quest.getTimeLimit() - elapsed);
+                    lore.add("&7剩余时间：&c" + com.keran.quests.util.TimeUtil.format(remain));
+                }
+            }
+            if (unlock == QuestManager.UnlockStatus.LOCKED_KNOWN) {
+                lore.add("");
+                lore.add("&7缺少前置：");
+                lore.addAll(describeQuestPrerequisites(player, quest));
+            }
+            lore.add("");
+            lore.add("&7点击查看详情");
+        } else {
+            lore.add("");
+            lore.add("&8完成前置任务以解锁…");
+        }
+
+        String name = hidden ? "&8？？？" : quest.getName();
+
+        return new GuiItem(plugin, iconId, fallback)
+                .name(name)
+                .lore(lore)
+                .action("open_quest", quest.getFullId())
+                .build();
+    }
+
+    /** 描述某任务缺少的前置。 */
+    private List<String> describeQuestPrerequisites(Player player, Quest quest) {
+        List<String> out = new ArrayList<>();
+        if (quest.getPrerequisites() == null) return out;
+        PlayerData data = plugin.getPlayerData(player);
+        var pre = quest.getPrerequisites();
+
+        for (String ref : pre.getQuestCompletedAll()) {
+            Quest q = plugin.getTreeLoader().resolveQuest(ref);
+            String full = q == null ? ref : q.getFullId();
+            String nm = q == null ? ref : com.keran.quests.util.Text.strip(q.getName());
+            out.add((data.isCompleted(full) ? "&a [✔] " : "&c [✗] ") + "&f" + nm);
+        }
+        for (String ref : pre.getTreeCompletedAll()) {
+            QuestTree t = plugin.getTreeLoader().getTree(ref);
+            String nm = t == null ? ref : com.keran.quests.util.Text.strip(t.getName());
+            out.add((plugin.getQuestManager().isTreeCompleted(data, ref) ? "&a [✔] " : "&c [✗] ")
+                    + "&f" + nm);
+        }
+        if (!pre.getQuestCompletedAny().isEmpty()) {
+            int need = pre.getQuestCompletedAnyNeed();
+            int done = 0;
+            List<String> lines = new ArrayList<>();
+            for (String ref : pre.getQuestCompletedAny()) {
+                Quest q = plugin.getTreeLoader().resolveQuest(ref);
+                String full = q == null ? ref : q.getFullId();
+                String nm = q == null ? ref : com.keran.quests.util.Text.strip(q.getName());
+                boolean ok = data.isCompleted(full);
+                if (ok) done++;
+                lines.add((ok ? "&a[✔] " : "&7") + nm);
+            }
+            out.add("&7任意 &f" + need + " &7个（&a" + done + "&7/&f" + need + "&7）：");
+            out.add("&8  " + String.join(" &7/ ", lines));
+        }
+        for (var item : pre.getOraxenItems()) {
+            int have = plugin.getOraxenHook().countItem(player, item.getItem());
+            out.add((have >= item.getCount() ? "&a [✔] " : "&c [✗] ")
+                    + "&f持有 " + item.getItem() + " x" + item.getCount()
+                    + " &7(" + have + "/" + item.getCount() + ")");
+        }
+        if (pre.getPermission() != null && !pre.getPermission().isBlank()) {
+            boolean ok = player.hasPermission(pre.getPermission());
+            out.add((ok ? "&a [✔] " : "&c [✗] ") + "&f权限 " + pre.getPermission());
+        }
+        return out;
+    }
+
+    // ==================================================================
+    //  ③ 任务详情
+    // ==================================================================
+
+    public void openQuestDetail(Player player, String fullId) {
+        Quest quest = plugin.getTreeLoader().resolveQuest(fullId);
+        if (quest == null) {
+            player.closeInventory();
+            return;
+        }
+        PlayerData data = plugin.getPlayerData(player);
+        QuestProgress p = data.getProgress(quest.getFullId());
+
+        String title = com.keran.quests.util.Text.strip(quest.getName());
+        if (title.length() > 32) title = title.substring(0, 32);
+
+        Inventory inv = Bukkit.createInventory(null, 54,
+                com.keran.quests.util.Text.color(plugin.getConfig()
+                        .getString("gui.title_quest_detail", "{quest_name}")
+                        .replace("{quest_name}", title)));
+        fillBackground(inv);
+
+        QuestState state = p == null ? QuestState.LOCKED : p.getState();
+        int stageIdx = p == null ? 0 : p.getStageIndex();
+
+        // ---- 中央：任务信息 + 阶段列表 ----
+        List<String> infoLore = new ArrayList<>();
+        infoLore.add("&8──────────────");
+        infoLore.add("&7类型：" + (quest.getType() == QuestType.MAIN ? "&6主线" : "&b支线"));
+        infoLore.add("&7状态：" + stateLabel(state, data, quest));
+        if (state == QuestState.ACTIVE && quest.getTimeLimit() > 0 && p.getStartedAt() > 0) {
+            long elapsed = (System.currentTimeMillis() - p.getStartedAt()) / 1000;
+            int remain = (int) Math.max(0, quest.getTimeLimit() - elapsed);
+            infoLore.add("&7剩余时间：&c" + com.keran.quests.util.TimeUtil.format(remain));
+        }
+        infoLore.add("&7阶段：&f" + Math.min(stageIdx + 1, quest.getStageCount())
+                + "&7/&f" + quest.getStageCount());
+        infoLore.add("");
+        infoLore.add("&7奖励：");
+        if (quest.getMoney() > 0) infoLore.add("&8 · &f金钱 &a" + (int) quest.getMoney());
+        if (quest.getExp() > 0) infoLore.add("&8 · &f经验 &a" + quest.getExp());
+        for (Quest.RewardItem ri : quest.getRewardItems()) {
+            infoLore.add("&8 · &f" + ri.getRawId() + " &7x" + ri.getAmount());
+        }
+        if (quest.getMoney() <= 0 && quest.getExp() <= 0 && quest.getRewardItems().isEmpty()) {
+            infoLore.add("&8 · &7无");
+        }
+        if (quest.isRepeatable()) {
+            infoLore.add("");
+            infoLore.add("&7循环任务，冷却 &f" + com.keran.quests.util.TimeUtil.formatChinese(quest.getCooldown()));
+        }
+
+        inv.setItem(4, new GuiItem(plugin, quest.getIcon(), Material.BOOK)
+                .name(quest.getName())
+                .lore(infoLore)
+                .build());
+
+        // ---- 阶段列表（按可见性） ----
+        List<Integer> visibleStages = getVisibleStages(quest, p);
+        int[] stageSlots = {19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34};
+        for (int i = 0; i < visibleStages.size() && i < stageSlots.length; i++) {
+            int si = visibleStages.get(i);
+            QuestStage stage = quest.getStages().get(si);
+            inv.setItem(stageSlots[i], buildStageNode(player, quest, stage, p, si, state));
+        }
+
+        // ---- 失败条件 ----
+        if (quest.isFailOnDeath() || quest.getTimeLimit() > 0 || !quest.getForbiddenRegions().isEmpty()) {
+            List<String> failLore = new ArrayList<>();
+            failLore.add("&8──────────────");
+            if (quest.isFailOnDeath()) failLore.add("&c[✗] 不可死亡");
+            if (quest.getTimeLimit() > 0) {
+                failLore.add("&c[✗] " + com.keran.quests.util.TimeUtil.formatChinese(quest.getTimeLimit()) + "内完成");
+            }
+            for (Quest.ForbiddenRegion fr : quest.getForbiddenRegions()) {
+                failLore.add("&c[✗] 不可进入 " + fr.getRegion());
+            }
+            inv.setItem(40, new GuiItem(plugin, cfg("gui.icons.failed", "quest_ui_failed"), Material.REDSTONE_BLOCK)
+                    .name("&c失败条件")
+                    .lore(failLore)
+                    .build());
+        }
+
+        // ---- 按钮 ----
+        inv.setItem(45, new GuiItem(plugin, cfg("gui.icons.back", "quest_ui_back"), Material.ARROW)
+                .name("&e← 返回")
+                .action("open_tree", quest.getTreeId())
+                .build());
+
+        if (state == QuestState.ACTIVE) {
+            inv.setItem(48, new GuiItem(plugin, cfg("gui.icons.active", "quest_ui_active"), Material.YELLOW_DYE)
+                    .name("&e追踪此任务")
+                    .lore("&7让 &f%kq_current% &7显示这个任务")
+                    .action("track", quest.getFullId())
+                    .build());
+            if (plugin.getConfig().getBoolean("gui.allow_abandon_in_gui", true)) {
+                inv.setItem(50, new GuiItem(plugin, cfg("gui.icons.failed", "quest_ui_failed"), Material.BARRIER)
+                        .name("&c放弃任务")
+                        .lore("&7进度将被清空")
+                        .action("abandon", quest.getFullId())
+                        .build());
+            }
+        } else {
+            String err = plugin.getQuestManager().canAccept(player, quest);
+            if (err == null) {
+                inv.setItem(49, new GuiItem(plugin, cfg("gui.icons.available", "quest_ui_available"), Material.LIME_DYE)
+                        .name("&a[✔] 接取任务")
+                        .lore("&7点击开始此任务")
+                        .action("accept", quest.getFullId())
+                        .build());
+            } else {
+                inv.setItem(49, new GuiItem(plugin, cfg("gui.icons.locked", "quest_ui_locked"), Material.GRAY_DYE)
+                        .name("&c无法接取")
+                        .lore("&7" + err)
+                        .build());
+            }
+        }
+
+        inv.setItem(53, new GuiItem(plugin, cfg("gui.icons.close", "quest_ui_close"), Material.BARRIER)
+                .name("&c关闭")
+                .action("close", "")
+                .build());
+
+        currentView.put(player.getUniqueId(), View.QUEST_DETAIL);
+        player.openInventory(inv);
+    }
+
+    /** 计算可见的阶段序号列表。 */
+    private List<Integer> getVisibleStages(Quest quest, QuestProgress p) {
+        List<Integer> out = new ArrayList<>();
+        int n = quest.getStageCount();
+        int cur = p == null ? 0 : p.getStageIndex();
+
+        switch (quest.getStageVisibility()) {
+            case FULL:
+                for (int i = 0; i < n; i++) out.add(i);
+                break;
+            case HIDDEN:
+                out.add(Math.min(cur, Math.max(0, n - 1)));
+                break;
+            case SEQUENTIAL:
+            default:
+                for (int i = 0; i <= cur && i < n; i++) out.add(i);
+                break;
+        }
+        return out;
+    }
+
+    /** 构建阶段节点。 */
+    private ItemStack buildStageNode(Player player, Quest quest, QuestStage stage,
+                                     QuestProgress p, int stageIndex, QuestState state) {
+        int cur = p == null ? 0 : p.getStageIndex();
+        boolean isDone = p != null && p.isStageCompleted(stageIndex);
+        boolean isCurrent = stageIndex == cur && state == QuestState.ACTIVE;
+
+        String iconId;
+        Material fallback;
+        if (isDone) {
+            iconId = cfg("gui.icons.stage_done", "quest_ui_stage_done");
+            fallback = Material.LIME_STAINED_GLASS_PANE;
+        } else if (isCurrent) {
+            iconId = cfg("gui.icons.stage_active", "quest_ui_stage_active");
+            fallback = Material.YELLOW_STAINED_GLASS_PANE;
+        } else {
+            iconId = cfg("gui.icons.locked", "quest_ui_locked");
+            fallback = Material.GRAY_STAINED_GLASS_PANE;
+        }
+
+        List<String> lore = new ArrayList<>();
+        lore.add("&8──────────────");
+        if (isDone) {
+            lore.add("&a[✔] 已完成");
+        } else if (isCurrent) {
+            lore.add("&e[▶] 进行中");
+        } else {
+            lore.add("&7未开始");
+        }
+        lore.add("");
+
+        for (int ri = 0; ri < stage.getRequirements().size(); ri++) {
+            Requirement req = stage.getRequirements().get(ri);
+            int prog = p == null ? 0 : p.getRequirementProgress(stageIndex, ri);
+            int target = req.target();
+            boolean ok = prog >= target;
+            String mark = ok ? "&a[✔]" : (isCurrent ? "&e[▶]" : "&7·");
+            String progText = "";
+            switch (req.getType()) {
+                case MM_KILL:
+                case ORAXEN_ITEM:
+                case PLAYER_KILL:
+                    progText = " &7" + prog + "/" + target;
+                    break;
+                case REGION_STAY:
+                    progText = " &7" + prog + "/" + target + "秒";
+                    break;
+                default:
+                    progText = ok ? "" : (isCurrent ? "" : " &8未开始");
+                    break;
+            }
+            lore.add(mark + " &f" + com.keran.quests.util.Text.strip(req.describe()) + progText);
+            // requirement 的 description（可选）作为补充说明缩进显示
+            if (req.getDescription() != null && !req.getDescription().isBlank()) {
+                lore.add("   &8" + com.keran.quests.util.Text.strip(req.getDescription()));
+            }
+        }
+
+        if (stage.getMode() == com.keran.quests.config.model.enums.StageMode.ANY) {
+            lore.add("");
+            lore.add("&7需满足其中 &f" + stage.getNeed() + " &7条");
+        }
+
+        return new GuiItem(plugin, iconId, fallback)
+                .name("&f阶段 " + (stageIndex + 1) + " &7· &f" + com.keran.quests.util.Text.strip(stage.getName()))
+                .lore(lore)
+                .build();
+    }
+
+    private String stateLabel(QuestState state, PlayerData data, Quest quest) {
+        switch (state) {
+            case COMPLETED:
+                return "&a[✔] 已完成";
+            case ACTIVE:
+                return "&e[▶] 进行中";
+            case FAILED:
+                return "&c[✗] 已失败";
+            case AVAILABLE:
+                return "&e[❗] 可接取";
+            default:
+                return "&7未解锁";
+        }
+    }
+
+    // ==================================================================
+    //  ④ 抉择界面
+    // ==================================================================
+
+    public void openChoice(Player player, Quest quest, QuestStage stage) {
+        List<QuestStage.Choice> choices = stage.getChoices();
+
+        // 根据选项数量动态决定界面大小与槽位：
+        //   1~2 个 → 3 行（27 格），槽位左右对开
+        //   3~4 个 → 5 行（45 格），槽位横向均分
+        //   5+ 个  → 6 行（54 格），两行铺开
+        // 原实现硬编码 {11, 15}，配置 3 个及以上选项时超出的会被静默丢弃，
+        // 玩家看到 2 个选项但实际有 3 个，属于功能性缺陷。
+        int[] slots;
+        int rows;
+        if (choices.size() <= 2) {
+            rows = 3;
+            slots = new int[]{11, 15};
+        } else if (choices.size() <= 4) {
+            rows = 5;
+            slots = new int[]{20, 22, 24, 31};
+        } else {
+            rows = 6;
+            slots = new int[]{19, 21, 23, 25, 29, 31, 33, 37, 39, 41, 43};
+        }
+        slots = java.util.Arrays.copyOf(slots, Math.min(slots.length, choices.size()));
+
+        String rawTitle = plugin.getConfig().getString("gui.title_choice", "⚠ 抉择 · {title}");
+        String title = rawTitle.replace("{title}", stage.getChoiceTitle());
+
+        Inventory inv = Bukkit.createInventory(null, rows * 9,
+                com.keran.quests.util.Text.color(title));
+        fillBackground(inv);
+
+        // 提示（放在第一行正中间）
+        int infoSlot = rows == 3 ? 4 : 4;
+        inv.setItem(infoSlot, new GuiItem(plugin, cfg("gui.icons.choice", "quest_ui_choice"), Material.PAPER)
+                .name("&6[!] " + stage.getChoiceTitle())
+                .lore("&7此选择 &c不可撤销&7，请谨慎决定。")
+                .build());
+
+        for (int i = 0; i < choices.size() && i < slots.length; i++) {
+            QuestStage.Choice c = choices.get(i);
+            List<String> lore = new ArrayList<>();
+            lore.add("&8──────────────");
+            if (c.getDescription() != null && !c.getDescription().isBlank()) {
+                lore.add("&7" + c.getDescription());
+                lore.add("");
+            }
+            lore.add("&c[!] 选择后不可更改");
+            lore.add("");
+            if (plugin.getConfig().getBoolean("gui.choice_require_shift", true)) {
+                lore.add("&e按住 Shift 点击以确认");
+            } else {
+                lore.add("&e点击以确认");
+            }
+
+            inv.setItem(slots[i], new GuiItem(plugin, c.getIcon(), Material.PAPER)
+                    .name("&f" + c.getLabel())
+                    .lore(lore)
+                    .action("choice",
+                            quest.getFullId() + "|" + stage.getId() + "|" + i)
+                    .build());
+        }
+
+        // 关闭按钮放在最后一行正中间
+        int closeSlot = (rows - 1) * 9 + 4;
+        inv.setItem(closeSlot, new GuiItem(plugin, cfg("gui.icons.close", "quest_ui_close"), Material.BARRIER)
+                .name("&7稍后再决定")
+                .lore("&7（可以关闭界面，之后重新打开）")
+                .action("close", "")
+                .build());
+
+        currentView.put(player.getUniqueId(), View.CHOICE);
+        player.openInventory(inv);
+    }
+
+    // ==================================================================
+    //  点击处理
+    // ==================================================================
+
+    @EventHandler
+    public void onClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+        View view = currentView.get(player.getUniqueId());
+        if (view == null) return;
+
+        event.setCancelled(true);   // 永远阻止拖拽
+
+        ItemStack clicked = event.getCurrentItem();
+        if (clicked == null || clicked.getType().isAir()) return;
+        ItemMeta meta = clicked.getItemMeta();
+        if (meta == null) return;
+
+        String raw = meta.getPersistentDataContainer().get(
+                plugin.getActionKey(), PersistentDataType.STRING);
+        if (raw == null) return;
+
+        String[] parts = raw.split("\\|", 2);
+        String action = parts[0];
+        String data = parts.length > 1 ? parts[1] : "";
+
+        // 抉择需要 Shift
+        if ("choice".equals(action)
+                && plugin.getConfig().getBoolean("gui.choice_require_shift", true)
+                && !player.isSneaking()) {
+            com.keran.quests.util.Text.send(player, "&c请按住 Shift 再点击以确认选择。");
+            return;
+        }
+
+        switch (action) {
+            case "open_tree" -> openQuestList(player, data, 0);
+            case "back_tree_list" -> openTreeList(player, 0);
+            case "open_quest" -> openQuestDetail(player, data);
+            case "close" -> player.closeInventory();
+            case "page" -> openTreeList(player, parseInt(data, 0));
+            case "page_tree" -> {
+                String[] pd = data.split("\\|");
+                if (pd.length == 2) openQuestList(player, pd[0], parseInt(pd[1], 0));
+            }
+            case "accept" -> handleAccept(player, data);
+            case "abandon" -> handleAbandon(player, data);
+            case "track" -> handleTrack(player, data);
+            case "choice" -> handleChoice(player, data);
+            default -> {
+            }
+        }
+    }
+
+    private void handleAccept(Player player, String fullId) {
+        Quest quest = plugin.getTreeLoader().resolveQuest(fullId);
+        if (quest == null) return;
+        String err = plugin.getQuestManager().accept(player, quest);
+        if (err != null) {
+            com.keran.quests.util.Text.send(player, err);
+        }
+        // 刷新界面
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (player.isOnline()) {
+                if (plugin.getConfig().getBoolean("gui.allow_abandon_in_gui", true)) {
+                    openQuestDetail(player, fullId);
+                } else {
+                    openQuestList(player, quest.getTreeId(), 0);
+                }
+            }
+        });
+    }
+
+    private void handleAbandon(Player player, String fullId) {
+        Quest quest = plugin.getTreeLoader().resolveQuest(fullId);
+        if (quest == null) return;
+        String err = plugin.getQuestManager().abandon(player, quest);
+        if (err != null) com.keran.quests.util.Text.send(player, err);
+        openQuestDetail(player, fullId);
+    }
+
+    private void handleTrack(Player player, String fullId) {
+        plugin.getPlayerData(player).setTrackedQuest(fullId);
+        plugin.getPlayerDataStore().save(plugin.getPlayerData(player));
+        com.keran.quests.util.Text.send(player, "&a已追踪该任务。");
+        player.closeInventory();
+    }
+
+    private void handleChoice(Player player, String data) {
+        String[] parts = data.split("\\|");
+        if (parts.length < 3) return;
+        Quest quest = plugin.getTreeLoader().resolveQuest(parts[0]);
+        if (quest == null) return;
+        QuestStage stage = null;
+        for (QuestStage s : quest.getStages()) {
+            if (s.getId().equals(parts[1])) {
+                stage = s;
+                break;
+            }
+        }
+        if (stage == null) return;
+        int idx = parseInt(parts[2], -1);
+        String err = plugin.getChoiceManager().choose(player, quest, stage, idx);
+        if (err != null) com.keran.quests.util.Text.send(player, err);
+        player.closeInventory();
+    }
+
+    @EventHandler
+    public void onClose(InventoryCloseEvent event) {
+        if (event.getPlayer() instanceof Player p) {
+            UUID id = p.getUniqueId();
+            // 完整清理本玩家在 GUI 里留下的全部状态，避免 pageState 这类缓存
+            // 随在线时间无限堆积（原实现只清了 currentView，属于内存泄漏）。
+            currentView.remove(id);
+            pageState.remove(id);
+        }
+    }
+
+    // ==================================================================
+    //  工具
+    // ==================================================================
+
+    private void fillBackground(Inventory inv) {
+        String bgId = cfg("gui.icons.bg", "quest_ui_bg");
+        ItemStack bg = new GuiItem(plugin, bgId, Material.GRAY_STAINED_GLASS_PANE)
+                .name("&r")
+                .build();
+        ItemMeta meta = bg.getItemMeta();
+        if (meta != null) {
+            meta.getPersistentDataContainer().remove(plugin.getActionKey());
+            bg.setItemMeta(meta);
+        }
+        for (int i = 0; i < inv.getSize(); i++) {
+            inv.setItem(i, bg.clone());
+        }
+    }
+
+    private String cfg(String path, String def) {
+        String v = plugin.getConfig().getString(path, def);
+        return v == null ? def : v;
+    }
+
+    private int parseInt(String s, int def) {
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (Exception e) {
+            return def;
+        }
+    }
+}

@@ -1,0 +1,25 @@
+# 构建产物
+build/
+out/
+.gradle/
+*.class
+
+# 第三方依赖（版权归各自作者，不随本仓库分发）
+libs/
+!libs/.gitkeep
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 测试用临时文件
+testclient/node_modules/
+testclient/*.log

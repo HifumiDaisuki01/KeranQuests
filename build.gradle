@@ -1,0 +1,57 @@
+plugins {
+    id 'java'
+}
+
+group = 'com.keran'
+version = '1.0.0'
+
+repositories {
+    mavenCentral()
+    maven { url = uri('https://repo.papermc.io/repository/maven-public/') }
+    maven { url = uri('https://maven.enginehub.org/repo/') }
+    maven { url = uri('https://repo.extendedclip.com/content/repositories/placeholderapi/') }
+    maven { url = uri('https://repo.citizensnpcs.co/') }
+    maven { url = uri('https://nexus.phoenixdevt.fr/repository/maven-public/') }
+}
+
+dependencies {
+    compileOnly 'io.papermc.paper:paper-api:1.20.1-R0.1-SNAPSHOT'
+    compileOnly 'com.sk89q.worldguard:worldguard-bukkit:7.0.9'
+    compileOnly 'com.sk89q.worldedit:worldedit-bukkit:7.2.15'
+    compileOnly 'me.clip:placeholderapi:2.11.7'
+    // Citizens / MythicMobs / Oraxen / Vault 全部以本地 jar 提供（见 libs/）
+    // —— 走 Maven 会因沙箱 TLS 与传递依赖（libby 等）失败，本地 jar 更可靠。
+    compileOnly fileTree(dir: 'libs', include: ['*.jar'])
+}
+
+java {
+    // 沙箱里只有 JDK 20；用 toolchain 会因找不到 17 而失败，
+    // 因此改为直接用当前 JDK + --release 17 产出 Java 17 字节码。
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 17
+}
+
+// 简易 fat-jar：只把 SQLite 驱动打进去（如后续需要）
+jar {
+    // 显式声明依赖 classes/resources，避免 Gradle 判定 UP-TO-DATE 后跳过打包
+    dependsOn tasks.named('classes')
+    inputs.files(sourceSets.main.output).withPropertyName('mainOutput')
+
+    archiveBaseName.set('KeranQuests')
+    archiveClassifier.set('')
+    destinationDirectory.set(file("$rootDir/out"))
+    // 每次构建都重新打包，防止产物不刷新
+    outputs.upToDateWhen { false }
+
+    manifest {
+        attributes(
+            'Implementation-Title': 'KeranQuests',
+            'Implementation-Version': version
+        )
+    }
+}

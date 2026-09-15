@@ -1,0 +1,665 @@
+# =============================================================================
+#  「烛龙探秘」—— 任务树示例 / 写法标准示范
+# =============================================================================
+#  说明：
+#    这不是一份"可以直接玩"的任务，而是一份**教学模板**。
+#    里面演示了本插件支持的全部任务树能力，你可以照着它写自己的任务。
+#    怪物名 / 区域名 / NPC 名 / 物品名 都是占位符，请按自己服务器实际情况替换。
+#    凡是占位符都带 "example_" 前缀或"示例"字样，方便你搜索替换。
+#
+#  文件位置：plugins/KeranQuests/quests/<文件名>.yml
+#    一个 yml 文件 = 一棵任务树，文件名就是树 ID。
+#    本文件 → 树 ID 为 "zhulong"
+#
+#  改完怎么生效？
+#    游戏内执行 /kq reload   —— 不用重启服务器，不用重新编译
+#
+#  前置知识速查：
+#    · 任务唯一标识 = "树ID:任务ID"，写作 zhulong:main01
+#    · 写前置时可以用全名，也可以只写短名（main01），插件会自动补全
+#    · 占位符 {player} 会替换成玩家名，命令以控制台身份执行
+#    · 命令支持延迟写法："delay 100 | 要执行的命令"（100 tick = 5 秒）
+#
+#  演示覆盖清单（想快速找某个功能的写法，搜这个关键字）：
+#    [区域停留]  main01 / side01
+#    [击杀MM怪]  main02 阶段一 / main03b 阶段二
+#    [第三方联动] main02 阶段二 / main03a  【custom_trigger】
+#    [NPC对话]   main02 阶段三 / main03b 阶段四
+#    [收集物品]  side01  【含 consume 扣不扣物品】
+#    [限时禁死]  main02  【failure 段】
+#    [抉择二选一] main03  【choice 段】
+#    [终结整树]  main03a 【terminates_tree】
+#    [循环任务]  daily01 【repeatable + cooldown】
+#    [PvP击杀]   daily01 【player_kill + 防刷】
+#    [多选阶段]  example_any_stage 【mode: ANY】
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+#  ① 任务树头部 —— 定义这棵树本身
+# -----------------------------------------------------------------------------
+
+id: zhulong                       # 树 ID，必须与文件名一致
+name: '&6烛龙探秘'                 # 显示名，& 是颜色代码（&6=金色）
+description: '&7深入烛龙站，揭开深空联合的秘密。'   # GUI 任务树列表里的简介
+icon: 'quest_ui_main'             # GUI 图标，用 环渡客-任务UI.yml 里的物品 ID
+order: 2                          # 排序，数字小的排前面；本树排在 tutorial 之后
+enabled: true                     # 设 false 可临时关掉整棵树
+
+# 本树的任务并发上限（不写则用 config.yml 里的全局值）
+main_quest_limit: 1               # 主线同时只能做 1 个
+side_quest_limit: 3               # 支线同时最多 3 个
+
+# -----------------------------------------------------------------------------
+#  ② 整树前置 —— 满足这些条件才能看到/接到本树的任务
+# -----------------------------------------------------------------------------
+#  可用的判定类型（可随意组合，默认"全部都要满足"）：
+#    quest_completed_all:  [任务列表]   必须完成列表里"全部"任务
+#    quest_completed_any:  [任务列表]   完成其中"任意"几个即可
+#    quest_completed_any_need: N        配合上面用，表示"任意 N 个"（不写默认 1）
+#    tree_completed_all:   [树ID列表]   必须完成这几个树
+#    tree_completed_any:   [树ID列表]   完成其中任意一个树即可
+#    tree_completed_any_need: N         配合上面用
+#    permission: '权限节点'              需要某权限
+#    permissions_any: [权限列表]         满足任意一个权限即可
+#    mode: ALL / ANY                     ALL=全部满足（默认），ANY=满足 N 个
+#    need: N                             配合 mode: ANY
+#    oraxen_items:                       需要持有某些物品（写法见任务内的 prerequisites）
+# -----------------------------------------------------------------------------
+prerequisites:
+  # 必须完成「新手入门」整棵树
+  tree_completed_all:
+    - 'tutorial'
+  # 并且「接头 / 相逢 / 第一桶金」里完成任意 2 个
+  quest_completed_any:
+    - 'tutorial:jietou'
+    - 'tutorial:xiangfeng'
+    - 'tutorial:diyitongjin'
+  quest_completed_any_need: 2
+
+
+# =============================================================================
+#  ③ 任务列表 —— 下面是每个任务的具体写法
+# =============================================================================
+#  每个任务的通用字段速查：
+#
+#  ┌─ 基本信息 ────────────────────────────────────────────────────────────┐
+#  │ name              显示名（支持 & 颜色代码）                           │
+#  │ type              MAIN=主线 / SIDE=支线                                │
+#  │                   主线受 main_quest_limit 限制，支线受 side_quest_limit │
+#  │ weight            权重，越大越优先。影响 %kq_current% 和 GUI 排序      │
+#  │ icon              GUI 图标（Oraxen 物品 ID）                           │
+#  │ stage_visibility  阶段可见性，三选一：                                 │
+#  │                     FULL       一开始就显示全部阶段                    │
+#  │                     SEQUENTIAL 做完当前阶段才显示下一个                │
+#  │                     HIDDEN     只显示当前阶段                          │
+#  │ hidden            true = 不在 GUI 列表直接显示（只能被抉择进入）       │
+#  └───────────────────────────────────────────────────────────────────────┘
+#
+#  ┌─ 阶段 stages ─────────────────────────────────────────────────────────┐
+#  │ 每个阶段：id / name / mode / requirements                              │
+#  │   mode: ALL  阶段内所有要求都要满足（默认）                            │
+#  │   mode: ANY  满足 need 个即可（need 默认 1）                          │
+#  │                                                                       │
+#  │ requirement 支持的全部类型：                                           │
+#  │   mm_kill         击杀 MythicMobs 怪物                                │
+#  │                     mobs: [怪物内部名,...]  留空=任意MM怪             │
+#  │                     count: N                要杀几个                  │
+#  │   player_kill     击杀玩家（PvP）                                     │
+#  │                     count: N                                          │
+#  │                     region: '区域名'        只能在此区域内击杀         │
+#  │                     world: '世界名'                                   │
+#  │                     same_victim_cooldown: 秒 同一目标多久内只算一次    │
+#  │   region_stay     在区域内停留                                        │
+#  │                     region: '区域名'                                  │
+#  │                     world: '世界名'                                   │
+#  │                     seconds: N              要停留几秒                │
+#  │   region_enter    进入区域即完成（不用停留）                          │
+#  │   region_forbidden 禁止进入某区域（进入即"失败"，不是完成条件）        │
+#  │   oraxen_item     持有 Oraxen 物品                                    │
+#  │                     item: '物品ID'                                    │
+#  │                     count: N                                          │
+#  │                     consume: true/false     完成后是否扣除            │
+#  │   custom_trigger  自定义触发器（★ 第三方插件联动的核心）              │
+#  │                     key: '触发器名字'                                 │
+#  │                  第三方插件执行这条命令即算完成：                      │
+#  │                     /kquests trigger <玩家> <触发器名字>               │
+#  │   npc_talk        和 Citizens NPC 对话                                │
+#  │                     npc: 'NPC显示名'                                  │
+#  │   permission      持有权限即算完成                                    │
+#  │                     permission: '权限节点'                            │
+#  │                                                                       │
+#  │ 每条 requirement 还可以加：                                           │
+#  │   display: '显示的名字'    GUI 里显示成什么（不写自动生成）            │
+#  │   description: '补充说明'  鼠标悬停时显示的详细解释                    │
+#  └───────────────────────────────────────────────────────────────────────┘
+#
+#  ┌─ 生命周期命令 ────────────────────────────────────────────────────────┐
+#  │ on_start            接取任务时执行                                    │
+#  │ on_stage_complete   每完成一个阶段时执行                              │
+#  │ on_complete         完成整个任务时执行                                │
+#  │ on_fail             任务失败时执行                                    │
+#  │ 阶段内还可写 commands_on_complete（只在该阶段完成时执行）             │
+#  │                                                                       │
+#  │ 延迟写法："delay <tick> | <命令>"    20 tick = 1 秒                   │
+#  │ 可用占位符：{player} {uuid} {quest_id} {quest_name} {tree_id}         │
+#  │             {stage_id} {stage_name} {fail_reason}                     │
+#  └───────────────────────────────────────────────────────────────────────┘
+#
+#  ┌─ 奖励 rewards ────────────────────────────────────────────────────────┐
+#  │ money: 金额          Vault 经济（需装经济插件）                       │
+#  │ exp: 数量            原版经验                                         │
+#  │ items:               物品奖励                                         │
+#  │   - id: 'oraxen物品ID'                                                │
+#  │     amount: 数量                                                      │
+#  │ commands: [命令列表]  直接执行命令（发称号、给权限等）                │
+#  └───────────────────────────────────────────────────────────────────────┘
+#
+#  ┌─ 循环任务 ────────────────────────────────────────────────────────────┐
+#  │ repeatable: true                   设为 true 变成循环任务             │
+#  │ cooldown: 秒数                     完成后多久能再接（86400 = 24 小时）│
+#  │ reset_progress_on_complete: true   重接时是否清空旧进度（默认 true）  │
+#  └───────────────────────────────────────────────────────────────────────┘
+#
+#  ┌─ 失败条件 failure ────────────────────────────────────────────────────┐
+#  │ on_death: true/false     玩家死亡是否判定失败                         │
+#  │ time_limit: 秒数         限时多久（0 = 不限时）                       │
+#  │ fail_cooldown: 秒数      失败后多久能重接                             │
+#  │ reset_on_fail: WHOLE_QUEST / STAGE                                    │
+#  │                  WHOLE_QUEST 回退到阶段一                             │
+#  │                  STAGE       只回退当前阶段                           │
+#  │ forbidden_regions:       禁止进入的区域（进入即失败）                 │
+#  │   - region: '区域名'                                                  │
+#  │     world: '世界名'                                                   │
+#  │ max_kills:               击杀数上限（超过即失败）                     │
+#  │   count: N                                                            │
+#  │   types: [怪物名,...]    只统计这些怪，留空=统计全部                  │
+#  └───────────────────────────────────────────────────────────────────────┘
+#
+#  ┌─ 互斥 ────────────────────────────────────────────────────────────────┐
+#  │ exclusive_group: '组名'     同一组的任务只能选一个                    │
+#  │ exclusive_with: [任务列表]   显式声明不能同时做的任务                 │
+#  │ terminates_tree: true       完成后整棵树终结，不可再接后续任务        │
+#  └───────────────────────────────────────────────────────────────────────┘
+#
+#  ┌─ 整树前置 prerequisites ──────────────────────────────────────────────┐
+#  │ 写法与上面「② 整树前置」完全一致，只是作用范围限于这一个任务          │
+#  └───────────────────────────────────────────────────────────────────────┘
+# =============================================================================
+
+quests:
+
+  # ===========================================================================
+  #  主线01 —— 最简单的任务：去一个地方待一会儿
+  #  【演示：region_stay / 标题动画 / 延迟命令 / 金钱经验奖励】
+  # ===========================================================================
+  main01:
+    name: '&6主线01 · 前往烛龙站'
+    type: MAIN
+    weight: 100
+    icon: 'quest_ui_main'
+    stage_visibility: FULL          # 一开始就显示全部阶段
+
+    stages:
+      - id: goto_station
+        name: '&f抵达烛龙站'
+        mode: ALL
+        requirements:
+          # 【区域停留】进区域后要待满 seconds 秒
+          # ⚠ region/world 是占位符，请换成你自己的 WorldGuard 区域
+          - type: region_stay
+            region: 'example_zhulong_station'
+            world: 'world'
+            seconds: 5
+            display: '在烛龙站停留'
+            description: '进入烛龙站区域并停留 5 秒'
+
+    on_start:
+      - 'title {player} title {"text":"烛龙探秘","color":"gold"}'
+      - 'title {player} subtitle {"text":"前往烛龙站","color":"gray"}'
+      - 'delay 40 | tellraw {player} {"text":"[电台] 坐标已发送，注意安全。","color":"yellow"}'
+
+    on_complete:
+      - 'tellraw {player} {"text":"[电台] 你到了。前哨站还有活人。","color":"green"}'
+
+    rewards:
+      money: 1500
+      exp: 200
+
+  # ===========================================================================
+  #  主线02 —— 最复杂的一个：三阶段 + 限时 + 禁死 + 第三方联动
+  #  【演示：多阶段串联 / mm_kill / custom_trigger / npc_talk / failure 全套】
+  # ===========================================================================
+  main02:
+    name: '&6主线02 · 三十分钟'
+    type: MAIN
+    weight: 99
+    icon: 'quest_ui_main'
+    stage_visibility: FULL
+
+    prerequisites:
+      quest_completed_all:
+        - 'zhulong:main01'
+
+    # ---- 失败条件（这就是你要的"不可死亡 + 30 分钟内完成"）----
+    failure:
+      on_death: true               # 死了算失败
+      time_limit: 1800             # 30 分钟 = 1800 秒
+      reset_on_fail: WHOLE_QUEST   # 失败后整个任务重置，回到阶段一
+      fail_cooldown: 60            # 失败后 60 秒才能重接
+      #
+      # 下面两段是"其他失败条件"的写法示例，需要就取消注释：
+      #
+      # 不能进入某个区域（区域名填你的 WorldGuard 区域）
+      # forbidden_regions:
+      #   - region: 'example_no_go_zone'
+      #     world: 'world'
+      #
+      # 击杀数不能超过 N 个（types 留空表示统计全部怪）
+      # max_kills:
+      #   count: 50
+      #   types: []
+
+    stages:
+
+      # -------- 阶段一：清剿 --------
+      - id: clear
+        name: '&f阶段一 · 清剿'
+        mode: ALL
+        requirements:
+          # 【击杀MM怪】mobs 里填 MythicMobs 怪物"内部名"
+          # —— 内部名 = 怪物 yml 配置文件里最左边那一行（不是 Display 显示名）
+          # 这里是占位例子，请换成你自己的怪物
+          - type: mm_kill
+            mobs: ['example_mob_a', 'example_mob_b', 'example_mob_c']
+            count: 10
+            display: '击杀 三种目标敌人'
+            description: '三种敌人合计击杀 10 个（任意组合，不区分种类）'
+        # 阶段完成时额外执行的命令
+        commands_on_complete:
+          - 'tellraw {player} {"text":"[电台] 干得漂亮，直升机 30 秒后到。","color":"green"}'
+          - 'delay 100 | title {player} title {"text":"撤离！","color":"red"}'
+          - 'delay 100 | title {player} subtitle {"text":"前往停机坪","color":"yellow"}'
+
+      # -------- 阶段二：撤离（★ 第三方插件联动）--------
+      - id: extract
+        name: '&f阶段二 · 直升机撤离'
+        mode: ALL
+        requirements:
+          # 【第三方联动】自定义触发器
+          # 任何插件执行这条命令即算完成（玩家名会自动替换）：
+          #     /kquests trigger <玩家> sl_zhulong_extracted
+          #
+          # 典型用法：写在撤离点插件的 console-commands 里
+          #     kquests trigger {player} sl_zhulong_extracted
+          # 也可以给 Citizens NPC 挂：
+          #     /npc command add -p kquests trigger <p> sl_zhulong_extracted
+          #
+          # 容错说明：触发器名不存在、玩家没接这个任务，这条命令都会静默忽略，
+          #           绝不会报错刷屏，可以放心大量使用。
+          - type: custom_trigger
+            key: 'sl_zhulong_extracted'
+            display: '完成撤离'
+            description: '在停机坪触发撤离（由撤离点插件判定）'
+
+      # -------- 阶段三：对话 --------
+      - id: debrief
+        name: '&f阶段三 · 情报交接'
+        mode: ALL
+        requirements:
+          # 【NPC对话】npc 填 Citizens 里那个 NPC 的显示名
+          # 对话内容在 plugins/KeranQuests/npc/dialogue.yml 里配置
+          - type: npc_talk
+            npc: '示例联络员'
+            display: '与联络员对话'
+
+    on_start:
+      - 'title {player} title {"text":"30:00","color":"red"}'
+      - 'title {player} subtitle {"text":"任务开始 · 不可死亡","color":"gray"}'
+      - 'tellraw {player} {"text":"[电台] 清掉那三种东西，然后上直升机。","color":"yellow"}'
+
+    on_complete:
+      - 'tellraw {player} {"text":"[联络员] 你的表现超出预期。我们谈谈。","color":"aqua"}'
+      - 'delay 30 | tellraw {player} {"text":"[提示] 打开 /kq 查看抉择","color":"yellow"}'
+
+    rewards:
+      money: 5000
+      exp: 500
+
+  # ===========================================================================
+  #  支线01 —— 收集物品
+  #  【演示：oraxen_item / consume 扣不扣物品 / 命令奖励】
+  # ===========================================================================
+  side01:
+    name: '&b支线01 · 搜寻现场'
+    type: SIDE
+    weight: 50
+    icon: 'quest_ui_side'
+    stage_visibility: FULL
+
+    prerequisites:
+      quest_completed_all:
+        - 'zhulong:main01'
+        - 'zhulong:main02'
+
+    stages:
+      - id: find_items
+        name: '&f在烛龙站找到三个装置'
+        mode: ALL
+        requirements:
+          # 先要人在区域里（和收集条件并列，两个都要满足）
+          - type: region_stay
+            region: 'example_zhulong_station'
+            world: 'world'
+            seconds: 3
+            display: '身处烛龙站'
+            description: '必须在烛龙站区域内搜刮'
+
+          # 【收集物品·不扣除】consume 不写 = false
+          - type: oraxen_item
+            item: 'example_item_core'
+            count: 1
+            display: '拾取 某核心'
+            description: '残骸中闪着微光的核心'
+
+          - type: oraxen_item
+            item: 'example_item_chip'
+            count: 2
+            display: '拾取 数据芯片 ×2'
+            description: '录音设备里的存储芯片'
+
+          # 【收集物品·要扣除】consume: true → 任务完成时物品被收走
+          - type: oraxen_item
+            item: 'example_item_badge'
+            count: 1
+            consume: true
+            display: '上交 徽章'
+            description: '作为凭证提交，完成后扣除'
+
+    on_start:
+      - 'tellraw {player} {"text":"[电台] 顺手搜一下残骸，可能有线索。","color":"gray"}'
+
+    on_complete:
+      - 'tellraw {player} {"text":"[电台] 这些证据……值得深挖。","color":"aqua"}'
+
+    rewards:
+      money: 3000
+      exp: 300
+      # 命令奖励：可以发称号、给权限、给原版物品
+      commands:
+        - 'tellraw {player} {"text":"[奖励] 获得 3000 金币 + 300 经验","color":"gold"}'
+
+  # ===========================================================================
+  #  主线03 —— 抉择节点（★ 二选一，在 GUI 里体现）
+  #  【演示：choice / choice_group / choices 列表】
+  # ===========================================================================
+  #  玩法：做完主线02 后，这个任务只有一个"抉择"阶段。
+  #  玩家打开 /kq 点这个任务，会弹出抉择界面，两个按钮：
+  #     拒绝合作 → 进入 main03a
+  #     接受合作 → 进入 main03b
+  #  选完之后不能改，另一个分支永远做不了（靠互斥组锁死）。
+  # ===========================================================================
+  main03:
+    name: '&6主线03 · 抉择'
+    type: MAIN
+    weight: 98
+    icon: 'quest_ui_choice'
+    stage_visibility: FULL
+
+    prerequisites:
+      quest_completed_all:
+        - 'zhulong:main02'
+
+    stages:
+      - id: decide
+        name: '&f做出你的选择'
+        mode: ALL
+
+        # ---- 抉择阶段专用配置 ----
+        choice: true                     # 标记这是抉择节点
+        choice_group: 'zhulong_final'    # 抉择组名（要和分支任务的互斥组名一致）
+        choice_title: '&6与深空联合的未来'  # 界面标题
+        choices:                         # 选项列表（可以写多于两个）
+          - quest: 'zhulong:main03a'     # 选中后接取哪个任务
+            label: '&c拒绝合作'            # 按钮文字
+            description: |               # 按钮说明（| 开头，\n 换行）
+              | &7就此收手，带着你的报酬离开。
+              | &c任务树将永久终结。
+            icon: 'quest_ui_failed'      # 按钮图标
+          - quest: 'zhulong:main03b'
+            label: '&a接受合作'
+            description: |
+              | &7继续深入，除掉烛龙站的头目。
+              | &a解锁后续主线与循环任务。
+            icon: 'quest_ui_done'
+
+    on_start:
+      - 'tellraw {player} {"text":"[联络员] 你有两个选择。想清楚。","color":"aqua"}'
+
+  # ===========================================================================
+  #  主线03A —— 拒绝合作
+  #  【演示：hidden / exclusive_group / exclusive_with / terminates_tree】
+  # ===========================================================================
+  main03a:
+    name: '&6主线03A · 拒绝合作'
+    type: MAIN
+    weight: 97
+    icon: 'quest_ui_failed'
+    stage_visibility: FULL
+    hidden: true                     # 不在 GUI 列表直接出现，只能被抉择进入
+    exclusive_group: 'zhulong_final' # 互斥组：选了 A 就不能选 B
+    exclusive_with:
+      - 'zhulong:main03b'
+    terminates_tree: true            # ★ 完成后整棵树终结，后续任务全部锁死
+
+    stages:
+      - id: refuse
+        name: '&f离开'
+        mode: ALL
+        requirements:
+          # 用触发器来"确认"这个选择
+          # 也可以换成 npc_talk 或 region_enter，看你的剧情演出
+          - type: custom_trigger
+            key: 'sl_zhulong_refuse'
+            display: '确认拒绝'
+
+    on_start:
+      - 'tellraw {player} {"text":"[联络员] ……你会后悔的。","color":"red"}'
+      - 'delay 20 | title {player} title {"text":"烛龙探秘 · 终结","color":"red"}'
+      - 'delay 20 | title {player} subtitle {"text":"你选择了离开","color":"gray"}'
+
+    on_complete:
+      - 'tellraw {player} {"text":"[结算] 任务树已终结，奖励已发放。","color":"gold"}'
+
+    rewards:
+      money: 20000
+      exp: 2000
+      commands:
+        # 【发权限】按你自己服务器的权限命名规则改
+        - 'lp user {player} permission set example.zhulong.ending_a true'
+        - 'tellraw {player} {"text":"[奖励] 20000 金币 + 2000 经验","color":"gold"}'
+
+  # ===========================================================================
+  #  主线03B —— 接受合作
+  #  【演示：四阶段长任务 / 条件解锁后续任务】
+  # ===========================================================================
+  main03b:
+    name: '&6主线03B · 深入烛龙站'
+    type: MAIN
+    weight: 96
+    icon: 'quest_ui_main'
+    stage_visibility: FULL
+    hidden: true
+    exclusive_group: 'zhulong_final'
+    exclusive_with:
+      - 'zhulong:main03a'
+
+    failure:
+      on_death: true
+      reset_on_fail: WHOLE_QUEST
+      fail_cooldown: 30
+
+    stages:
+
+      # -------- 阶段一：同时满足"到地方"+"拿到东西" --------
+      - id: infiltrate
+        name: '&f阶段一 · 潜入'
+        mode: ALL
+        requirements:
+          - type: region_stay
+            region: 'example_zhulong_station'
+            world: 'world'
+            seconds: 3
+            display: '抵达烛龙站'
+          - type: oraxen_item
+            item: 'example_item_keycard'
+            count: 1
+            consume: false
+            display: '获取 门禁卡'
+            description: '从实验体身上搜出'
+
+      # -------- 阶段二：击杀 BOSS --------
+      - id: boss
+        name: '&f阶段二 · 击杀头目'
+        mode: ALL
+        requirements:
+          - type: mm_kill
+            mobs: ['example_boss']
+            count: 1
+            display: '击杀 示例头目'
+            description: '烛龙站最深处的守卫'
+        commands_on_complete:
+          - 'tellraw {player} {"text":"[电台] 门禁已解锁！维修通道打开了。","color":"green"}'
+          - 'delay 60 | title {player} title {"text":"撤离","color":"red"}'
+
+      # -------- 阶段三：维修通道撤离（另一个触发器）--------
+      - id: escape
+        name: '&f阶段三 · 维修通道撤离'
+        mode: ALL
+        requirements:
+          - type: custom_trigger
+            key: 'sl_zhulong_maintenance_extract'
+            display: '从维修通道撤离'
+
+      # -------- 阶段四：汇报 --------
+      - id: report
+        name: '&f阶段四 · 汇报'
+        mode: ALL
+        requirements:
+          - type: npc_talk
+            npc: '示例负责人'
+            display: '与负责人对话'
+
+    on_start:
+      - 'title {player} title {"text":"深入烛龙站","color":"gold"}'
+      - 'tellraw {player} {"text":"[联络员] 拿上门禁卡，别惊动守望者。","color":"aqua"}'
+
+    on_complete:
+      - 'tellraw {player} {"text":"[负责人] 你做成了。循环任务已对你开放。","color":"gold"}'
+      - 'delay 40 | tellraw {player} {"text":"[提示] /kq 查看新的循环任务","color":"yellow"}'
+
+    rewards:
+      money: 15000
+      exp: 1500
+      commands:
+        # ★ 给玩家开通循环任务的权限（daily01 的 prerequisites 会检查它）
+        #   这就是"做完某任务才解锁某任务"的标准做法
+        - 'lp user {player} permission set example.zhulong.daily true'
+        - 'tellraw {player} {"text":"[奖励] 15000 金币 + 1500 经验 + 解锁循环任务","color":"gold"}'
+
+  # ===========================================================================
+  #  循环任务 daily01 —— 24 小时刷新一次（★ 循环任务标准写法）
+  #  【演示：repeatable / cooldown / player_kill / 防刷 / 权限前置】
+  # ===========================================================================
+  #  玩家想立刻刷新冷却可以执行：
+  #    /kquests refresh <玩家> daily01
+  # ===========================================================================
+  daily01:
+    name: '&9循环 · 清场'
+    type: SIDE
+    weight: 10
+    icon: 'quest_ui_active'
+    stage_visibility: FULL
+    hidden: true
+
+    repeatable: true                 # 循环任务开关
+    cooldown: 86400                  # 24 小时 = 86400 秒
+    reset_progress_on_complete: true # 重接时清空旧进度
+
+    prerequisites:
+      quest_completed_all:
+        - 'zhulong:main03b'
+      # ★ 权限前置：必须持有这条权限才能接
+      #   配合 main03b 里的 lp 命令，实现"做完 03B 才解锁循环任务"
+      permission: 'example.zhulong.daily'
+
+    failure:
+      on_death: false
+      time_limit: 0                  # 0 = 不限时
+      reset_on_fail: WHOLE_QUEST
+
+    stages:
+      - id: hunt
+        name: '&f猎杀'
+        mode: ALL
+        requirements:
+          # 【PvP击杀】只能在指定区域内击杀，且有防刷机制
+          - type: player_kill
+            count: 5
+            region: 'example_zhulong_station'  # 只能在这个区域内击杀才算
+            world: 'world'
+            same_victim_cooldown: 300          # 同一受害者 5 分钟内只算一次
+            display: '在烛龙站击杀玩家'
+            description: '仅统计烛龙站区域内击杀；同一目标 5 分钟内只计一次'
+
+    on_start:
+      - 'tellraw {player} {"text":"[悬赏] 目标已放出。别在安全区动手。","color":"red"}'
+
+    on_complete:
+      - 'tellraw {player} {"text":"[悬赏] 干得漂亮。24 小时后再来。","color":"gold"}'
+
+    rewards:
+      money: 8000
+      exp: 800
+      commands:
+        - 'give {player} minecraft:diamond 3'
+        - 'tellraw {player} {"text":"[奖励] 8000 金币 + 800 经验 + 3 钻石","color":"gold"}'
+
+  # ===========================================================================
+  #  额外示例 example_any_stage —— 多选阶段（满足任意 N 条即可）
+  #  【演示：mode: ANY / need: N】
+  #  这个任务只是示范写法，你可以删掉
+  # ===========================================================================
+  example_any_stage:
+    name: '&e示例 · 多选阶段'
+    type: SIDE
+    weight: 5
+    icon: 'quest_ui_side'
+    stage_visibility: FULL
+    hidden: true
+
+    stages:
+      # 这个阶段：三种路线任选其一完成即可
+      - id: any_route
+        name: '&f任选一种方式'
+        mode: ANY
+        need: 1                      # 满足 1 条就算阶段完成
+        requirements:
+          - type: region_enter
+            region: 'example_route_a'
+            world: 'world'
+            display: '路线A：走正门'
+          - type: region_enter
+            region: 'example_route_b'
+            world: 'world'
+            display: '路线B：翻窗户'
+          - type: custom_trigger
+            key: 'sl_zhulong_route_c'
+            display: '路线C：挖地道'
+
+    on_complete:
+      - 'tellraw {player} {"text":"[示例] 你选了一条路进来了。","color":"gray"}'
+
+    rewards:
+      money: 100
+      exp: 10
