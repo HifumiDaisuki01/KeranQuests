@@ -93,6 +93,16 @@ public class QuestManager {
         if (failCd > 0) {
             return Text.color(plugin.prefixed("cannot_accept_cooldown", "time", TimeUtil.format(failCd)));
         }
+        // 放弃锁：刚放弃过本任务，冷却结束前不能再接（防「接了放弃」反复刷命令）
+        int abandonCd = data.getCooldownRemaining(quest.getFullId(), "ABANDON_LOCK");
+        if (abandonCd > 0) {
+            // 用 prefixedOr 带兜底：服务器上的 config.yml 是首次安装时释放的旧副本，
+            // 插件升级后新增的消息键不会自动补进去，用 prefixed 会返回空串，
+            // 玩家就会收到"一条空白提示"——这个坑在实测中真实踩到了。
+            return Text.color(plugin.prefixedOr("cannot_accept_abandon_cooldown",
+                    "&c你刚放弃过这个任务，请 &f{time} &c后再来接取。",
+                    "time", TimeUtil.format(abandonCd)));
+        }
 
         // 4. 任务树解锁门槛（由某任务的 unlock_tree 解锁；未声明门槛的树默认开放）
         if (!isTreeUnlocked(data, quest)) {
@@ -714,10 +724,30 @@ public class QuestManager {
         if (quest.getFullId().equals(data.getTrackedQuest())) {
             data.setTrackedQuest(null);
         }
-        Text.send(player, plugin.getConfig().getString("messages.prefix", "")
-                + plugin.prefixed("quest_abandoned", "quest_name", quest.getName()));
 
-        // ---- 放弃惩罚 ----
+        // 放弃锁：写入冷却，冷却结束前不能再次接取本任务
+        if (quest.getAbandonCooldown() > 0) {
+            data.setCooldownUntil(quest.getFullId(), "ABANDON_LOCK",
+                    System.currentTimeMillis() + quest.getAbandonCooldown() * 1000L);
+        }
+
+        // 放弃提示：任务里自定义了就用自定义的，没写则回退到 config.yml 默认文案
+        String selfMsg = quest.getAbandonMessage();
+        if (selfMsg != null && !selfMsg.isBlank()) {
+            String rendered = com.keran.quests.util.Text.color(
+                    com.keran.quests.util.Text.replace(selfMsg,
+                            "quest", quest.getName(), "quest_name", quest.getName(),
+                            "player", player.getName()));
+            rendered = rendered.replace("%quest%", quest.getName())
+                    .replace("%player%", player.getName());
+            Text.send(player, plugin.getConfig().getString("messages.prefix", "") + rendered);
+        } else {
+            Text.send(player, plugin.getConfig().getString("messages.prefix", "")
+                    + plugin.prefixedOr("quest_abandoned",
+                    "&7已放弃任务：&f{quest_name}", "quest_name", quest.getName()));
+        }
+
+        // ---- 放弃惩罚（完全由命令决定，插件不预设任何惩罚）----
         applyAbandonPenalty(player, quest);
 
         plugin.getPlayerDataStore().save(data);
@@ -727,24 +757,18 @@ public class QuestManager {
     /**
      * 执行放弃任务的惩罚。
      *
-     * <p>顺序：先扣血、再跑自定义命令。
-     * 扣血用 {@code setHealth} 而不是 {@code damage}，因为 damage 会被护甲、
-     * 抗性提升、无敌帧影响，导致惩罚不稳定；setHealth 语义明确、可预期。
-     * 但要注意血量下限——setHealth(<=0) 会直接判定死亡，
-     * 这里钳到最小 0.5（半颗心），避免「放弃任务顺手死一次」的体验灾难。
+     * <p>惩罚方式<b>完全由任务配置里的 {@code abandon.commands} 决定</b>，插件不内置任何惩罚。
+     * 扣血只是其中一种可能的写法，例如：
+     * <pre>
+     * abandon:
+     *   commands:
+     *     - "effect give %player% minecraft:instant_damage 1 0"   # 扣血
+     *     - "eco take %player% 100"                                # 扣钱
+     *     - "say %player% 放弃了一个任务"
+     * </pre>
+     * 也支持 {@code "delay <ticks> | <command>"} 延迟执行语法。
      */
     private void applyAbandonPenalty(Player player, Quest quest) {
-        if (quest.isAbandonHealthEnabled()) {
-            double cost = quest.getAbandonHealthCost();
-            double max = player.getMaxHealth();
-            // 扣血后至少留 0.5 点，避免直接死亡
-            double target = Math.max(0.5D, Math.min(max, player.getHealth() - cost));
-            player.setHealth(target);
-            Text.send(player, plugin.prefixedOr("quest_abandon_penalty_health",
-                    "&c放弃任务，扣除 &f{amount} &c点生命值。",
-                    "amount", fmt(cost)));
-        }
-
         for (String raw : quest.getAbandonCommands()) {
             if (raw == null || raw.isBlank()) continue;
             String cmd = raw.replace("%player%", player.getName())
@@ -795,6 +819,7 @@ public class QuestManager {
         data.removeProgress(quest.getFullId());
         data.clearCooldown(quest.getFullId(), "COOLDOWN");
         data.clearCooldown(quest.getFullId(), "FAIL_LOCK");
+        data.clearCooldown(quest.getFullId(), "ABANDON_LOCK");
         if (quest.getFullId().equals(data.getTrackedQuest())) {
             data.setTrackedQuest(null);
         }

@@ -77,14 +77,26 @@ public class Quest {
      */
     private final boolean abandonAllowed;
 
-    /** 放弃时是否扣血。默认 {@code true}，配合 {@link #abandonHealthCost} 使用。 */
-    private final boolean abandonHealthEnabled;
-
-    /** 放弃时扣除的生命值（点）。默认 5，即 2.5 颗心。 */
-    private final double abandonHealthCost;
-
-    /** 放弃时额外执行的命令（支持 %player% 占位符，可配 delay 语法）。 */
+    /**
+     * 放弃时执行的命令（支持 %player% 占位符，可配 delay 语法）。
+     * <p>
+     * 惩罚方式完全由命令决定 —— 扣血、扣钱、给药水效果、记日志都行，插件不预设任何惩罚。
+     * 例：{@code "effect give %player% minecraft:instant_damage 1 0"}
+     */
     private final List<String> abandonCommands;
+
+    /**
+     * 放弃成功后给玩家看的提示文本。为空则用 config.yml 里的默认文案。
+     * 想改成什么样都行，比如「&7你放弃了任务，但代价已经记下了」。
+     */
+    private final String abandonMessage;
+
+    /**
+     * 放弃后的冷却秒数：这段时间内不能再次接取本任务。默认 0（不限制）。
+     * <p>
+     * 用于防止「反复接取→放弃」刷命令或刷状态。
+     */
+    private final int abandonCooldown;
 
     private Quest(String treeId, String id, String name, QuestType type, int weight, String icon,
                   StageVisibility stageVisibility, Prerequisite prerequisites, List<QuestStage> stages,
@@ -95,8 +107,8 @@ public class Quest {
                   boolean terminatesTree, boolean failOnDeath, int timeLimit, int failCooldown,
                   List<ForbiddenRegion> forbiddenRegions, int maxKills, List<String> maxKillTypes,
                   ResetMode resetOnFail, String unlockTree, boolean hidden,
-                  boolean abandonAllowed, boolean abandonHealthEnabled, double abandonHealthCost,
-                  List<String> abandonCommands) {
+                  boolean abandonAllowed, List<String> abandonCommands,
+                  String abandonMessage, int abandonCooldown) {
         this.treeId = treeId;
         this.id = id;
         this.name = name;
@@ -130,9 +142,9 @@ public class Quest {
         this.unlockTree = unlockTree;
         this.hidden = hidden;
         this.abandonAllowed = abandonAllowed;
-        this.abandonHealthEnabled = abandonHealthEnabled;
-        this.abandonHealthCost = abandonHealthCost;
         this.abandonCommands = abandonCommands;
+        this.abandonMessage = abandonMessage;
+        this.abandonCooldown = abandonCooldown;
     }
 
     public static Quest fromConfig(String treeId, String id, ConfigurationSection sec) {
@@ -228,32 +240,43 @@ public class Quest {
 
         // ---- 放弃任务的限制与惩罚 ----
         //
-        // 两种写法都支持：
-        //   简写  abandon: false                      → 禁止放弃
-        //   详写  abandon:
-        //           allowed: false
-        //           health: 5            （扣血量，0 = 不扣血）
-        //           commands: [...]      （额外执行的命令）
+        // 设计原则：插件不预设任何惩罚，惩罚方式完全由 commands 决定。
+        // 想扣血就写 effect give，想扣钱就写 eco take，想记日志就写 log，都行。
         //
-        // 默认：allowed = true（可放弃）、health = 5（扣 5 点生命值 = 2.5 颗心）。
-        // 用 getConfigurationSection 判类型，避免简写布尔值被当成配置节读取时抛异常。
+        // 三种写法都支持：
+        //   最简  abandon: false                      → 禁止放弃（等价 allowed: false）
+        //   简写  abandon: ["命令1", "命令2"]          → 可放弃 + 放弃时执行这些命令
+        //   详写  abandon:
+        //           allowed: true                     （默认 true）
+        //           cooldown: 300                     （放弃后多少秒不能再接，默认 0 = 不限制）
+        //           message: '&7你放弃了这个任务。'      （放弃后的提示，不写用默认文案）
+        //           commands: [...]                   （放弃时执行的命令）
+        //
+        // cooldown 单位是**秒**（和其它生命周期命令的 tick 不同，这里按玩家的直觉来）。
+        // 用 getConfigurationSection 判类型，避免简写值被当成配置节读取时抛异常。
         boolean abandonAllowed = true;
-        boolean abandonHealthEnabled = true;
-        double abandonHealthCost = 5.0D;
         List<String> abandonCommands = new ArrayList<>();
+        String abandonMessage = null;
+        int abandonCooldown = 0;
 
         Object abandonRaw = sec.get("abandon");
         if (abandonRaw instanceof Boolean b) {
-            // 简写形式：abandon: false 直接禁止放弃
+            // 最简形式：abandon: false 直接禁止放弃
             abandonAllowed = b;
+        } else if (abandonRaw instanceof List<?> list) {
+            // 简写形式：abandon 直接跟一个命令列表
+            abandonAllowed = true;
+            for (Object o : list) {
+                if (o != null) abandonCommands.add(String.valueOf(o));
+            }
         } else {
             ConfigurationSection as = sec.getConfigurationSection("abandon");
             if (as != null) {
                 abandonAllowed = as.getBoolean("allowed", true);
-                abandonHealthCost = as.getDouble("health", 5.0D);
-                // health: 0 表示不扣血
-                abandonHealthEnabled = abandonHealthCost > 0;
+                abandonCooldown = Math.max(0, as.getInt("cooldown", 0));
                 abandonCommands = new ArrayList<>(as.getStringList("commands"));
+                String msg = as.getString("message", null);
+                if (msg != null && !msg.isBlank()) abandonMessage = msg;
             }
         }
 
@@ -262,7 +285,7 @@ public class Quest {
                 rewardCommands, repeatable, cooldown, resetOnComplete, exclusiveGroup,
                 exclusiveWith, terminatesTree, failOnDeath, timeLimit, failCooldown,
                 forbidden, maxKills, maxKillTypes, resetOnFail, unlockTree, hidden,
-                abandonAllowed, abandonHealthEnabled, abandonHealthCost, abandonCommands);
+                abandonAllowed, abandonCommands, abandonMessage, abandonCooldown);
     }
 
     private static ConfigurationSection toSection(Object obj) {
@@ -423,19 +446,19 @@ public class Quest {
         return abandonAllowed;
     }
 
-    /** 放弃时是否扣血（由 abandon.health > 0 决定）。 */
-    public boolean isAbandonHealthEnabled() {
-        return abandonHealthEnabled;
-    }
-
-    /** 放弃时扣除的生命值点数（默认 5，即 2.5 颗心）。 */
-    public double getAbandonHealthCost() {
-        return abandonHealthCost;
-    }
-
-    /** 放弃时额外执行的命令列表。 */
+    /** 放弃时执行的命令列表（惩罚方式完全由这些命令决定）。 */
     public List<String> getAbandonCommands() {
         return abandonCommands;
+    }
+
+    /** 放弃后给玩家的提示文案；null 表示用 config.yml 的默认文案。 */
+    public String getAbandonMessage() {
+        return abandonMessage;
+    }
+
+    /** 放弃后的冷却秒数（这段时间内不能再接本任务）。0 = 不限制。 */
+    public int getAbandonCooldown() {
+        return abandonCooldown;
     }
 
     /** 奖励物品。 */

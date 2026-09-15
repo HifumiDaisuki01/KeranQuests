@@ -626,10 +626,11 @@ public class GuiManager implements Listener {
                     GuiItem ab = new GuiItem(plugin, cfg("gui.icons.failed", "quest_ui_failed"), Material.BARRIER)
                             .name("&c放弃任务")
                             .lore("&7进度将被清空");
-                    // 让玩家在点之前就知道代价，避免"点完才发现掉血"
-                    if (quest.isAbandonHealthEnabled()) {
-                        ab.lore("&c代价：扣除 &f" + fmtNum(quest.getAbandonHealthCost())
-                                + " &c点生命值");
+                    // 放弃代价由任务里的 abandon.commands 决定（扣血/扣钱/记日志都可能），
+                    // 插件无法通用地预知，所以这里不再硬编码任何代价提示；
+                    // 想告知玩家代价，请写进任务的 abandon.message。
+                    if (quest.getAbandonCooldown() > 0) {
+                        ab.lore("&7放弃后 &f" + quest.getAbandonCooldown() + " &7秒内无法再次接取");
                     }
                     ab.action("abandon", quest.getFullId());
                     inv.setItem(50, ab.build());
