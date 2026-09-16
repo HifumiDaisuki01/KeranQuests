@@ -36,9 +36,9 @@
 #        choice_made:       { 'zhulong_final': 'A' }  # 某抉择组选了指定值
 #        choice_any:        [ 'zhulong_final' ]       # 某抉择组做过选择
 #        has_item:                                    # 持有 Oraxen 物品
-#          - { item: 'zhulong_data', count: 1 }
+#          - { item: 'zhulong_log_drive', count: 1 }
 #        not_has_item:
-#          - { item: 'zhulong_data' }
+#          - { item: 'zhulong_log_drive' }
 #        permission: 'kq.vip'
 #        stage_at_least: { 'zhulong:main03': 2 }      # 阶段序号 >= N
 #        mode: ALL / ANY                              # 默认 ALL；ANY 时配 need: N
@@ -73,7 +73,7 @@
 #              choice_group: 'zhulong_final'  # 抉择组名（写玩家记录，用于互斥）
 #              value: 'A'                  # 记录的值（不写则按 A/B/C 自动编号）
 #              reply: '&7明智的选择。'       # 选完 NPC 的回应
-#              require_item: 'zhulong_data'  # 需要持有某物品（不够则灰掉）
+#              require_item: 'zhulong_log_drive'  # 需要持有某物品（不够则灰掉）
 #              require_count: 1
 #              consume: true               # 选了就扣除（false 只检查不扣）
 #              run: [ '命令' ]
@@ -193,7 +193,7 @@ dialogues:
   # ###########################################################################
   #  主线04 · 抉择：上交数据 / 谎称没找到
   # ###########################################################################
-  #  【关键】选项带物品门槛：没拿到 zhulong_data 的玩家看到「上交数据」是灰的，
+  #  【关键】选项带物品门槛：没拿到 zhulong_log_drive 的玩家看到「上交数据」是灰的，
   #         鼠标悬停会告诉他还差什么。
   # ###########################################################################
   kate_main04:
@@ -203,9 +203,17 @@ dialogues:
     when:
       quest_active: [ 'zhulong:main04' ]
     nodes:
+      # ★ 这一行 run 是关键：
+      #   下面的 choose 会 accept(main05a/main05b)，而主线并发上限是 1。
+      #   若此刻 main04 还挂着 ACTIVE，accept 会被「主线并发上限」拒掉 →
+      #   触发 rollback → 玩家卡在「抉择点了、分支没接上、main04 也没了」。
+      #   所以在对话【开头】先把 main04 结算掉：并发名额腾出来，
+      #   而且「玩家进入这段对话」本身就等价于「已向卡特复命」。
       - say:
           delay: 0
           text: '&7[卡特] &f你找到我要的东西了吗？'
+          run:
+            - 'kquests progress {player} zhulong:main04'
           after: 40
 
       - choose:
@@ -218,7 +226,7 @@ dialogues:
               quest: 'zhulong:main05a'
               choice_group: 'zhulong_final'
               value: 'A'
-              require_item: 'zhulong_data'
+              require_item: 'zhulong_log_drive'
               require_count: 1
               consume: true               # 选了就扣掉
               reply: '&7[卡特] &f明智的选择！现在等着吧，我会找你的。'
@@ -244,6 +252,9 @@ dialogues:
     freeze_player: true
     when:
       quest_active: [ 'zhulong:main05a' ]
+      # 抉择对话（kate_main04）播完时会把 stage1 顺带顶掉，
+      # 所以这段实际出现在「玩家又回来找卡特闲聊」的场合 ——
+      # 台词据此写成催他回烛龙站，而不是「跟我走」。
     nodes:
       - say:
           delay: 0
@@ -251,7 +262,7 @@ dialogues:
           after: 40
       - say:
           delay: 0
-          text: '&7[卡特] &f跟着我的人走，别拖后腿。'
+          text: '&7[卡特] &f还杵在这干嘛？回烛龙站待命，等我信号。'
           after: 60
 
   # ###########################################################################
@@ -314,7 +325,7 @@ dialogues:
             #   → side01 stage3 完成 → 任务完成 → 发奖励。
             - label: '拿，给你'
               hover: '交出冰芯样本'
-              require_item: 'zhulong_ice_core'
+              require_item: 'ice_core_sample'
               require_count: 1
               consume: true               # 选了就扣掉
               reply: '&7[黑市商人] &f好！好！不错！拿着，这是给你的。'

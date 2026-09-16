@@ -19,8 +19,8 @@
 #      ⚠ region_enter 要求「区域名 + 世界名」同时对上，只对上区域名不算
 #        （region 名在不同世界可以重复，插件会先按世界过滤再匹配名字）
 #    Oraxen 物品（当前 oraxen/ 目录下不存在）：
-#      · zhulong_data      烛龙站数据日志（主线03 获取 / 主线04 上交判定）
-#      · zhulong_ice_core  冰芯样本（支线01 获取与上交判定）
+#      · zhulong_log_drive      烛龙站数据日志（主线03 获取 / 主线04 上交判定）
+#      · ice_core_sample   冰芯样本（支线01 获取与上交判定）
 #    音频（/rad play 走 RadBroadcast）：
 #      · http://www.keran.cc/radio/main_kate_01.mp3
 #      · http://www.keran.cc/voice/main_kate_02.mp3  ~ main_kate_07.mp3
@@ -111,11 +111,11 @@ quests:
             description: '右键卡特，听他把话说完'
 
     on_start:
-      - 'tellraw {player} {"text":"[提示] 去 world 的 npc_kate 区域找卡特。","color":"yellow"}'
+      - 'tellraw {player} {"text":"[提示] 去 space 的 npc_kate 区域找卡特。","color":"yellow"}'
 
     on_complete:
-      - 'title {player} title {"text":"主线01 完成","color":"gold"}'
-      - 'title {player} subtitle {"text":"自己想办法到烛龙站","color":"gray"}'
+      - 'minecraft:title {player} title {"text":"主线01 完成","color":"gold"}'
+      - 'minecraft:title {player} subtitle {"text":"自己想办法到烛龙站","color":"gray"}'
       - 'tellraw {player} {"text":"[结算] 获得 10 个面包。","color":"gold"}'
 
     rewards:
@@ -218,7 +218,7 @@ quests:
   #  主线03 · 深入烛龙
   #  条件：不可死亡；30 分钟内完成；击杀 mm 怪 shouwei 不得超过 3 个
   #  失败后 30 分钟不能重接；主动放弃 60 分钟不能重接
-  #  流程：找卡特 → 取 zhulong_data → 撤离 → 完成，40 面包
+  #  流程：找卡特 → 取 zhulong_log_drive → 撤离 → 完成，40 面包
   # ===========================================================================
   main03:
     name: '&6主线03 · 深入烛龙'
@@ -258,11 +258,17 @@ quests:
       - id: brief
         name: '&f和卡特对话'
         mode: ALL
+        # ⚠ 测试期专用：进本阶段直接发一份数据日志。
+        #   正式玩法应由地图上的主楼电脑（容器/交互机制）发放，
+        #   上线前请删掉这条 give，否则玩家不用去拿也能过 stage2。
+        commands_on_complete:
+          - 'oraxen give {player} zhulong_log_drive 1'
         requirements:
           - type: npc_talk
             npc: '卡特'
             display: '与卡特交谈'
             description: '右键卡特，听他交代任务'
+        # 注：Oraxen 实际语法为 /oraxen give <targets> <item> <amount>，amount 必填（已实测）。
 
       # ---- stage2：找到数据日志 ----
       - id: get_data
@@ -270,11 +276,11 @@ quests:
         mode: ALL
         requirements:
           - type: oraxen_item
-            item: 'zhulong_data'
+            item: 'zhulong_log_drive'
             count: 1
             consume: false           # 这里只是"拿到就算"，不扣除，后面主线04要上交
             display: '获取烛龙站数据日志'
-            description: '在主楼电脑上拿到 zhulong_data'
+            description: '在主楼电脑上拿到 zhulong_log_drive'
 
       # ---- stage3：撤离 ----
       - id: extract
@@ -287,8 +293,8 @@ quests:
             description: '完成撤离（由 ExtractionPoints 判定）'
 
     on_start:
-      - 'title {player} title {"text":"30:00","color":"red"}'
-      - 'title {player} subtitle {"text":"不可死亡 · 守卫击杀上限 3","color":"gray"}'
+      - 'minecraft:title {player} title {"text":"30:00","color":"red"}'
+      - 'minecraft:title {player} subtitle {"text":"不可死亡 · 守卫击杀上限 3","color":"gray"}'
       - 'tellraw {player} {"text":"[卡特] 没用的东西……","color":"gray"}'
 
     on_complete:
@@ -301,9 +307,9 @@ quests:
         - 'tellraw {player} {"text":"[奖励] 面包 ×40","color":"gold"}'
 
   # ===========================================================================
-  #  主线04 · 抉择（★ 需要持有 zhulong_data 才能进行）
+  #  主线04 · 抉择（★ 需要持有 zhulong_log_drive 才能进行）
   #  流程：持数据日志右键卡特 → 对话内弹出 AB 抉择
-  #        A. 说真话，上交数据（扣除 zhulong_data）→ 解锁 05A
+  #        A. 说真话，上交数据（扣除 zhulong_log_drive）→ 解锁 05A
   #        B. 说假话，没找到（不扣）            → 解锁 05B
   # ===========================================================================
   main04:
@@ -316,14 +322,15 @@ quests:
 
     description: '&7你找到他要的东西了吗？'
 
+    # ★ 这里【故意不加】oraxen_items 物品门槛。
+    #   原设计是「必须持有数据盘才能接」+「抉择时消耗数据盘」，这两条会互相打架：
+    #   物品在「接任务」时校验、在「抉择」时扣除，而数据盘只有一份 ——
+    #   玩家一旦在别处弄丢/交掉，就再也接不到 main04，整条主线彻底断掉（实测踩到）。
+    #   数据盘的持有校验改由 dialogue.yml 里抉择选项的 require_item 负责，
+    #   那里更贴近真正的使用点（没数据盘时选项会灰掉，而不是整个任务接不了）。
     prerequisites:
       quest_completed_all:
         - 'zhulong:main03'
-      # ★ 进任务门槛：必须持有数据日志
-      oraxen_items:
-        - item: 'zhulong_data'
-          count: 1
-          consume: false
 
     abandon:
       allowed: true
@@ -346,8 +353,8 @@ quests:
       - 'tellraw {player} {"text":"[提示] 带着数据日志去找卡特。","color":"yellow"}'
 
     on_complete:
-      - 'title {player} title {"text":"主线04 完成","color":"gold"}'
-      - 'title {player} subtitle {"text":"新的路线已解锁","color":"gray"}'
+      - 'minecraft:title {player} title {"text":"主线04 完成","color":"gold"}'
+      - 'minecraft:title {player} subtitle {"text":"新的路线已解锁","color":"gray"}'
 
   # ===========================================================================
   #  主线05A · 合作线（A 支）
@@ -361,7 +368,7 @@ quests:
     icon: 'quest_ui_main'
     stage_visibility: SEQUENTIAL
     hidden: true
-    exclusive_group: 'zhulong_branch'
+    exclusive_group: 'zhulong_final'
     exclusive_with:
       - 'zhulong:main05b'
 
@@ -369,23 +376,53 @@ quests:
 
     prerequisites:
       quest_completed_all:
-        - 'zhulong:main04'
+        - 'zhulong:main03'
+      # ★ 抉择门：必须通过与卡特的对话抉择（选 A）才能接。
+      #   抉择发生时写入 treeState 的 choice:zhulong_final=A，
+      #   这里读同一个键 —— 于是没做过抉择的玩家在 GUI 里看到的是
+      #   「？？？」且点不动，而不是「能点但接了报错」。
+      #   注意：hidden 只影响显示，canAccept 不检查 hidden，
+      #   所以真正的门禁必须靠这条 quest_choice，不能只靠 hidden。
+      quest_choice: 'zhulong_final'
+      choice_value: 'A'
 
     stages:
-      - id: raid
+      # ---- stage1：卡特交代收尾行动 ----
+      - id: brief
         name: '&f与卡特的人一起推进'
         mode: ALL
         requirements:
-          # 走完 kate_main05a 对话即完成（对话播完 → npc_talk 判定通过）
-          # A 线的 Boss 战后续可另加 mm_kill / custom_trigger 要求
+          # 走完 kate_main05a 对话即完成（对话播完 → fireNpcTalk 判定通过）。
+          #
+          # ⚠ 已知行为（有意的取舍，不是 bug）：
+          #   抉择那段对话（kate_main04）播完时也会 fireNpcTalk(卡特)，
+          #   而 fireNpcTalk 会对【所有】ACTIVE 任务无差别推进 ——
+          #   此刻 main05a 刚被 accept、stage1 正好也挂在「和卡特对话」上，
+          #   于是本阶段被同一次对话顺带完成，玩家不必再跑一趟找卡特。
+          #   情节上说得通：卡特刚说了「明智的选择，等着吧」，这句就是交代。
+          #   若想强制玩家再谈一次，需给 fireNpcTalk 加阶段过滤（改代码），
+          #   或把本阶段换成别的判定类型。
           - type: npc_talk
             npc: '卡特'
             display: '与卡特交谈'
             description: '听卡特交代收尾行动'
 
+      # ---- stage2：回烛龙站 ----
+      - id: return
+        name: '&f返回烛龙站'
+        mode: ALL
+        commands_on_complete:
+          - 'tellraw {player} {"text":"[卡特·无线电] 到了？好，等我信号。","color":"aqua"}'
+        requirements:
+          - type: region_enter
+            region: 'zhulongzhan'
+            world: 'snow'
+            display: '进入烛龙站'
+            description: '重新进入烛龙站区域'
+
     on_start:
       - 'tellraw {player} {"text":"[卡特] 明智的选择！现在等着吧，我会找你的。","color":"green"}'
-      - 'tellraw {player} {"text":"[提示] 去找卡特接下一步。","color":"yellow"}'
+      - 'tellraw {player} {"text":"[提示] 回去找卡特，然后回烛龙站。","color":"yellow"}'
 
     on_complete:
       - 'tellraw {player} {"text":"[卡特] 干得漂亮。剩下的交给联合。","color":"green"}'
@@ -408,7 +445,7 @@ quests:
     icon: 'quest_ui_failed'
     stage_visibility: SEQUENTIAL
     hidden: true
-    exclusive_group: 'zhulong_branch'
+    exclusive_group: 'zhulong_final'
     exclusive_with:
       - 'zhulong:main05a'
 
@@ -416,7 +453,10 @@ quests:
 
     prerequisites:
       quest_completed_all:
-        - 'zhulong:main04'
+        - 'zhulong:main03'
+      # ★ 抉择门：必须通过与卡特的对话抉择（选 B）才能接，理由同 05A。
+      quest_choice: 'zhulong_final'
+      choice_value: 'B'
 
     stages:
       - id: dismiss
@@ -445,7 +485,7 @@ quests:
   # ===========================================================================
   #  支线01 · 材料收集
   #  「黑市商人主动联系到了我……他让我到 D2 区域找他」
-  #  流程：找黑市商人对话 → 取 zhulong_ice_core → 回去右键他交货
+  #  流程：找黑市商人对话 → 取 ice_core_sample → 回去右键他交货
   #        交货抉择：A 还没有（不结束，停在 stage3） / B 拿，给你（扣冰芯）
   #        ★ 对话播完 → npc_talk 判定通过 → stage3 完成 → 发 38 钻石
   # ===========================================================================
@@ -474,6 +514,11 @@ quests:
       - id: meet
         name: '&f和黑市商人对话'
         mode: ALL
+        # ⚠ 测试期专用：进本阶段直接发一份冰芯样本。
+        #   正式玩法应由地图上的冰盖采集点（容器/交互机制）发放，
+        #   上线前请删掉这条 give，否则玩家不用去采也能过 stage2。
+        commands_on_complete:
+          - 'oraxen give {player} ice_core_sample 1'
         requirements:
           - type: npc_talk
             npc: '黑市商人'
@@ -489,11 +534,11 @@ quests:
           - 'tellraw {player} {"text":"[心里话] 黑市商人要的东西找到了……","color":"gray"}'
         requirements:
           - type: oraxen_item
-            item: 'zhulong_ice_core'
+            item: 'ice_core_sample'
             count: 1
             consume: false           # 拿到即可，交货时才扣
             display: '找到冰芯样本'
-            description: '获取 zhulong_ice_core'
+            description: '获取 ice_core_sample'
 
       # ---- stage3：右键黑市商人交货 ----
       # ★ 对话 dealer_deliver（priority 100，stage_at_least: 2）会覆盖 dealer_brief

@@ -899,6 +899,14 @@ public class QuestManager {
             data.setTrackedQuest(null);
         }
 
+        // ★ 打断与该任务相关的对话。
+        //
+        // 与 abandon 同理：失败可能发生在对话进行中（最典型的是 main03 配了
+        // on_death，玩家一边听卡特说话一边被打死）。若不打断，剩余台词会继续
+        // 播完，finish() 还会 fireNpcTalk 去推进一个已经 FAILED 的任务，
+        // 且对话期间的 freeze 状态不会解开 —— 玩家任务都失败了人还被钉在原地。
+        plugin.getDialogueRunner().interrupt(player, true);
+
         plugin.getPlayerDataStore().save(data);
 
         if (plugin.getConfig().getBoolean("debug.log_completions", true)) {
