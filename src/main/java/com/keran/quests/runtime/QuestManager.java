@@ -928,6 +928,18 @@ public class QuestManager {
             data.setTrackedQuest(null);
         }
 
+        // ★ 打断与该任务相关的对话。
+        //
+        // 玩家可以在对话进行中打 /kq abandon。此前没有任何联动，后果是：
+        //   · 剩余台词继续播完，finish() 还会 fireNpcTalk 推进一个**已放弃的任务**，
+        //     日志里冒出莫名的阶段推进，玩家侧看到"任务都弃了 NPC 还在念台词"；
+        //   · 对话期间是 freeze 状态，任务没了人还被锁着不能动。
+        // 这里直接把对话掐掉（不跑 after、不推进 NPC_TALK）。
+        //
+        // 判据：只要玩家正在对话就打断 —— 同一 NPC 的对话必然是当前任务驱动的，
+        // 而玩家此刻能放弃的任务按设计也只有这一个在进行（主线并发上限 1）。
+        plugin.getDialogueRunner().interrupt(player, true);
+
         // 放弃锁：写入冷却，冷却结束前不能再次接取本任务
         if (quest.getAbandonCooldown() > 0) {
             data.setCooldownUntil(quest.getFullId(), "ABANDON_LOCK",

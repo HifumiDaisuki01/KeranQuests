@@ -192,6 +192,7 @@ public class DialogueRunner {
             return;
         }
         s.nodeIndex = index;
+        s.answered = false;              // 进入新节点，重新允许点击
 
         if (index >= s.dialogue.nodes.size()) {
             finish(player, s);
@@ -304,12 +305,31 @@ public class DialogueRunner {
             return "&c这个选项已经过期了。";
         }
         if (s.nodeIndex >= s.dialogue.nodes.size()) return "&c对话已结束。";
+
+        // ★ 防重复点击。
+        //
+        // 玩家点了「我没有问题了」之后，真正的推进要等 q.after 才发生 ——
+        // 如果这期间再点一次（真人手快，或连点两下），因为 nodeIndex 还没变，
+        // 上面的校验会放行，于是**排期两次 runFrom(index+1)**：
+        // 下游节点被跑两遍（台词的 run 命令跟着放两遍，实测配音被播了两次），
+        // finish() 也会被调两次。
+        //
+        // 解法：把「已受理本次点击」立刻写进会话（s.answered），
+        // 在 delay 结束、节点真正切换之前，后续点击一律当过期拒绝。
+        // 两个分支（exit / 循环回到菜单）都要锁，因为循环分支同样会重复排期。
+        if (s.answered) return "&c请稍候，正在继续……";
+        s.answered = true;
+
         Node n = s.dialogue.nodes.get(s.nodeIndex);
         if (n.type != NodeType.ASK || qIndex < 0 || qIndex >= n.questions.size()) {
+            s.answered = false;          // 无效点击不算数，放开锁
             return "&c无效的选项。";
         }
         Question q = n.questions.get(qIndex);
-        if (!q.condition.test(player)) return "&c这个选项当前不可用。";
+        if (!q.condition.test(player)) {
+            s.answered = false;
+            return "&c这个选项当前不可用。";
+        }
 
         if (q.answer != null && !q.answer.isBlank()) {
             player.sendMessage(DialogText.line(
@@ -317,14 +337,17 @@ public class DialogueRunner {
         }
         runCommands(player, q.run);
 
+        // 下游节点用**本次点击时捕获的 index**，不要读 s.nodeIndex ——
+        // 那是个会变的共享字段，延迟执行时读到的可能已经不是原值了。
+        final int cur = s.nodeIndex;
         if (q.exit) {
             // 跳出问答循环 → 进入下一节点
             schedule(player, s, Math.max(1, q.after),
-                    () -> runFrom(player, s, s.nodeIndex + 1));
+                    () -> runFrom(player, s, cur + 1));
         } else {
             // 回到本问句菜单（可反复问）
             schedule(player, s, Math.max(1, q.after),
-                    () -> runFrom(player, s, s.nodeIndex));
+                    () -> runFrom(player, s, cur));
         }
         return null;
     }
@@ -344,12 +367,23 @@ public class DialogueRunner {
             return "&c这个选项已经过期了。";
         }
         if (s.nodeIndex >= s.dialogue.nodes.size()) return "&c对话已结束。";
+
+        // ★ 防重复点击 —— 抉择这里比问答更要紧：
+        // 连点两下会**扣两次物品 + 接两次任务**，是真金白银的损失。
+        // 与 onPick 同理，推进要等 o.after，期间 nodeIndex 未变，校验放行。
+        if (s.answered) return "&c请稍候，正在继续……";
+        s.answered = true;
+
         Node n = s.dialogue.nodes.get(s.nodeIndex);
         if (n.type != NodeType.CHOOSE || oIndex < 0 || oIndex >= n.options.size()) {
+            s.answered = false;
             return "&c无效的选项。";
         }
         Option o = n.options.get(oIndex);
-        if (!o.condition.test(player)) return "&c这个选项当前不可用。";
+        if (!o.condition.test(player)) {
+            s.answered = false;
+            return "&c这个选项当前不可用。";
+        }
 
         // ---- 物品门槛复核 + 扣除（带回滚） ----
         //
@@ -364,6 +398,7 @@ public class DialogueRunner {
         if (itemId != null) {
             int have = plugin.getOraxenHook().countItem(player, itemId);
             if (have < itemCount) {
+                s.answered = false;
                 return "&c你没有「" + itemId + "」×" + itemCount + "（当前 " + have + "），无法选择。";
             }
             if (o.consume) {
@@ -377,6 +412,7 @@ public class DialogueRunner {
             Quest target = plugin.getTreeLoader().resolveQuest(o.quest);
             if (target == null) {
                 rollback(player, itemId, itemCount, consumed);
+                s.answered = false;
                 return "&c配置错误：目标任务 " + o.quest + " 不存在。";
             }
             PlayerData data = plugin.getPlayerData(player);
@@ -389,6 +425,7 @@ public class DialogueRunner {
             String err = plugin.getQuestManager().accept(player, target);
             if (err != null) {
                 rollback(player, itemId, itemCount, consumed);
+                s.answered = false;
                 return "&e分支任务接取失败：" + err;
             }
             Text.send(player, plugin.getConfig().getString("messages.prefix", "")
@@ -401,8 +438,9 @@ public class DialogueRunner {
                     Text.replace(o.reply, "player", player.getName())));
         }
         runCommands(player, o.run);
+        final int cur = s.nodeIndex;     // 捕获，避免延迟执行时读到已变的值
         schedule(player, s, Math.max(1, o.after),
-                () -> runFrom(player, s, s.nodeIndex + 1));
+                () -> runFrom(player, s, cur + 1));
         return null;
     }
 
@@ -461,6 +499,32 @@ public class DialogueRunner {
     /** 玩家是否正在对话。 */
     public boolean isTalking(UUID uuid) {
         return talking.contains(uuid);
+    }
+
+    /**
+     * 立刻打断某玩家的对话（不跑 after、不推进 NPC_TALK、不执行任何后续节点）。
+     *
+     * <p>用于「对话所依附的任务已经不存在了」的场景 —— 最典型的是玩家在
+     * 对话进行中点 {@code /kq abandon} 放弃了任务。此时：
+     * <ul>
+     *   <li>若不打断，剩余台词会继续播完，最后 {@code finish()} 还会去
+     *       {@code fireNpcTalk} 推进一个**已被放弃的任务**，日志里出现莫名其妙的
+     *       阶段推进，玩家侧则是「任务明明放弃了，卡特还在自说自话」；</li>
+     *   <li>对话期间玩家被 freeze 着，任务没了却还锁着移动，体验很糟。</li>
+     * </ul>
+     *
+     * @param notify 是否给玩家发一句「对话已中断」
+     * @return 是否确实打断了一个进行中的对话
+     */
+    public boolean interrupt(Player player, boolean notify) {
+        if (player == null) return false;
+        Session s = sessions.get(player.getUniqueId());
+        if (s == null) return false;
+        endSession(s);
+        if (notify) {
+            Text.send(player, "&7对话已中断。");
+        }
+        return true;
     }
 
     /** 某 NPC 是否配置了对话。 */
@@ -610,6 +674,17 @@ public class DialogueRunner {
         UUID uid;
         Dialogue dialogue;
         int nodeIndex;
+
+        /**
+         * 本次节点的点击是否已被受理（防连点）。
+         *
+         * <p>点击后的推进要等 {@code after} 个 tick，这期间 {@link #nodeIndex} 还没变，
+         * 光靠下标校验拦不住第二次点击 —— 会导致重复排期（台词/配音播两遍、
+         * 抉择重复扣物品重复接任务）。用这个标记在延迟窗口内直接拒绝后续点击。
+         *
+         * <p>每次进入新节点时（{@code runFrom} 开头）重置为 false。
+         */
+        boolean answered;
     }
 
     /** 一个 NPC 的一套对话。 */

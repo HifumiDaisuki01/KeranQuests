@@ -56,7 +56,32 @@ public class QuestTreeLoader {
                     plugin.getLogger().warning("任务树解析失败（返回 null）：" + f.getName());
                     continue;
                 }
+                // ⚠ 树 ID 冲突防护。
+                //
+                // trees 以 tree.getId() 为键，而 id 来自【文件内部】的 id: 字段，
+                // 不是文件名。因此两份内容不同、但都写着 id: zhulong 的 yml
+                // 会互相覆盖 —— 而且是【静默】覆盖，表现为「某棵树的配置怎么改都不生效」
+                // 或「layout 报出不存在的任务」（其实报的是另一份文件的 layout）。
+                //
+                // 实测踩到过：把旧的教学模板复制成 zhulong-example.yml 时没改 id，
+                // 结果正式树被覆盖，且日志里完全看不出原因。
+                if (tree.getId() != null && trees.containsKey(tree.getId())) {
+                    QuestTree old = trees.get(tree.getId());
+                    plugin.getLogger().warning("任务树 ID 冲突：文件 " + f.getName()
+                            + " 与 " + old.getSourceFile() + " 都声明了 id=" + tree.getId()
+                            + "，后者已覆盖前者。请把其中一个文件的 id 改成不同值。");
+                }
                 trees.put(tree.getId(), tree);
+                tree.setSourceFile(f.getName());
+
+                // 文件名与 id 不一致 → 提醒。树 ID 取自文件内 id: 字段，
+                // 与文件名无关；不一致时「改文件名」不会影响树 ID，容易造成误解，
+                // 也是「复制文件忘了改 id」这类事故的温床。
+                if (!fileId.equals(tree.getId())) {
+                    plugin.getLogger().warning("任务树文件名与 id 不一致：" + f.getName()
+                            + " 内写的是 id=" + tree.getId()
+                            + "。树 ID 以文件内 id: 字段为准（此处生效的是 " + tree.getId() + "）。");
+                }
                 for (Quest q : tree.getQuests()) {
                     questIndex.put(q.getFullId(), q);
                 }

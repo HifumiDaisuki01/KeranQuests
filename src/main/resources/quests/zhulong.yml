@@ -11,11 +11,13 @@
 #
 #  ── ⚠ 上线前必须核实的资源（当前服务器上【尚不存在】）────────────────────
 #    NPC（Citizens）：
-#      · 卡特          —— 深空联合负责人，位于 world 的 npc_kate 区域
+#      · 卡特          —— 深空联合负责人，位于 space 世界的 npc_kate 区域
 #      · 黑市商人      —— 位于 snow（雪原）的 D2 区域
-#    WorldGuard 区域（world 世界当前无任何区域）：
-#      · npc_kate      —— 卡特所在区域（主线01 stage1 判定用）
-#      · zhulongzhan   —— 烛龙站区域（主线02 stage1 判定用）
+#    WorldGuard 区域（**注意世界名，已在下面标出**）：
+#      · npc_kate      —— 卡特所在区域，位于 **space** 世界（主线01 stage1 判定用）
+#      · zhulongzhan   —— 烛龙站区域，位于 **snow** 世界（主线02 stage1 判定用）
+#      ⚠ region_enter 要求「区域名 + 世界名」同时对上，只对上区域名不算
+#        （region 名在不同世界可以重复，插件会先按世界过滤再匹配名字）
 #    Oraxen 物品（当前 oraxen/ 目录下不存在）：
 #      · zhulong_data      烛龙站数据日志（主线03 获取 / 主线04 上交判定）
 #      · zhulong_ice_core  冰芯样本（支线01 获取与上交判定）
@@ -91,7 +93,7 @@ quests:
         requirements:
           - type: region_enter
             region: 'npc_kate'
-            world: 'world'
+            world: 'space'
             display: '找到卡特'
             description: '前往卡特的所在地'
 
@@ -133,6 +135,10 @@ quests:
     weight: 99
     icon: 'quest_ui_main'
     stage_visibility: SEQUENTIAL
+    # ★ 前置未满足时显示为「？？？ / 完成前置任务以解锁…」，图标 quest_ui_unknown，
+    #   且不可点击（防止点进去偷看阶段详情）。前置做完后自动变回真名。
+    #   机制见 QuestManager.getUnlockStatus：hidden + 前置未满足 → LOCKED_HIDDEN。
+    hidden: true
 
     description: '&7想办法抵达烛龙站。'
 
@@ -163,7 +169,7 @@ quests:
         requirements:
           - type: region_enter
             region: 'zhulongzhan'
-            world: 'world'
+            world: 'snow'
             display: '进入烛龙站'
             description: '进入烛龙站区域即完成'
 
@@ -220,6 +226,7 @@ quests:
     weight: 98
     icon: 'quest_ui_main'
     stage_visibility: SEQUENTIAL
+    hidden: true                     # 前置未满足时显示「？？？」
 
     description: '&7把主楼电脑上的数据日志带回来，别惊动机械守卫。'
 
@@ -305,6 +312,7 @@ quests:
     weight: 97
     icon: 'quest_ui_choice'
     stage_visibility: SEQUENTIAL
+    hidden: true                     # 前置未满足时显示「？？？」
 
     description: '&7你找到他要的东西了吗？'
 
@@ -447,6 +455,7 @@ quests:
     weight: 50
     icon: 'quest_ui_side'
     stage_visibility: SEQUENTIAL
+    hidden: true                     # 前置未满足时显示「？？？」
 
     description: '&7黑市商人主动联系到了我……他让我到 D2 区域找他。'
 
@@ -555,6 +564,7 @@ quests:
     stage_visibility: SEQUENTIAL
     repeatable: true
     cooldown: 43200                 # 12 小时
+    hidden: true                     # 前置（main05a）未满足时显示「？？？」
 
     description: '&7把烛龙站外围的机械守卫清一清。'
 

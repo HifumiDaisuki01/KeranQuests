@@ -39,8 +39,8 @@
 #  ① 任务树头部 —— 定义这棵树本身
 # -----------------------------------------------------------------------------
 
-id: zhulong                       # 树 ID，必须与文件名一致
-name: '&6烛龙探秘'                 # 显示名，& 是颜色代码（&6=金色）
+id: zhulong_example               # 树 ID，必须与文件名一致
+name: '&8[示例] 烛龙探秘'           # 显示名，& 是颜色代码（&6=金色）
 description: '&7深入烛龙站，揭开深空联合的秘密。'   # GUI 任务树列表里的简介
 icon: 'quest_ui_main'             # GUI 图标，用 环渡客-任务UI.yml 里的物品 ID
 order: 2                          # 排序，数字小的排前面；本树排在 tutorial 之后
@@ -73,7 +73,7 @@ layout:
   - "0 0 0 0 0 0 0 0 0"                      # 第 1 排：全空格，留白
   - "0 main01 main02 0 0 0 0 0 0"            # 第 2 排：主线 01、02
   - "0 main03 0 0 0 side01 0 0 0"            # 第 3 排：主线 03 + 支线 01
-  - "0 main03a 0 0 0 side02 0 0 0"           # 第 4 排：主线 03 的分支
+  - "0 main03a 0 0 0 daily01 0 0 0"          # 第 4 排：主线 03 的分支
   - "0 main03b 0 0 0 daily01 example_any_stage 0 0"   # 第 5 排：另一分支 + 循环 + 示例
 # layout_empty_icon: 'quest_ui_bg'           # 空格用啥材质（不写就用默认背景板）
 
@@ -311,7 +311,7 @@ quests:
 
     prerequisites:
       quest_completed_all:
-        - 'zhulong:main01'
+        - 'zhulong_example:main01'
 
     # ---- 失败条件（这就是你要的"不可死亡 + 30 分钟内完成"）----
     failure:
@@ -411,8 +411,8 @@ quests:
 
     prerequisites:
       quest_completed_all:
-        - 'zhulong:main01'
-        - 'zhulong:main02'
+        - 'zhulong_example:main01'
+        - 'zhulong_example:main02'
 
     stages:
       - id: find_items
@@ -480,7 +480,7 @@ quests:
 
     prerequisites:
       quest_completed_all:
-        - 'zhulong:main02'
+        - 'zhulong_example:main02'
 
     stages:
       - id: decide
@@ -492,13 +492,13 @@ quests:
         choice_group: 'zhulong_final'    # 抉择组名（要和分支任务的互斥组名一致）
         choice_title: '&6与深空联合的未来'  # 界面标题
         choices:                         # 选项列表（可以写多于两个）
-          - quest: 'zhulong:main03a'     # 选中后接取哪个任务
+          - quest: 'zhulong_example:main03a'     # 选中后接取哪个任务
             label: '&c拒绝合作'            # 按钮文字
             description: |               # 按钮说明（| 开头，\n 换行）
               | &7就此收手，带着你的报酬离开。
               | &c任务树将永久终结。
             icon: 'quest_ui_failed'      # 按钮图标
-          - quest: 'zhulong:main03b'
+          - quest: 'zhulong_example:main03b'
             label: '&a接受合作'
             description: |
               | &7继续深入，除掉烛龙站的头目。
@@ -521,7 +521,7 @@ quests:
     hidden: true                     # 不在 GUI 列表直接出现，只能被抉择进入
     exclusive_group: 'zhulong_final' # 互斥组：选了 A 就不能选 B
     exclusive_with:
-      - 'zhulong:main03b'
+      - 'zhulong_example:main03b'
     terminates_tree: true            # ★ 完成后整棵树终结，后续任务全部锁死
 
     stages:
@@ -564,7 +564,7 @@ quests:
     hidden: true
     exclusive_group: 'zhulong_final'
     exclusive_with:
-      - 'zhulong:main03a'
+      - 'zhulong_example:main03a'
 
     failure:
       on_death: true
@@ -660,7 +660,7 @@ quests:
 
     prerequisites:
       quest_completed_all:
-        - 'zhulong:main03b'
+        - 'zhulong_example:main03b'
       # ★ 权限前置：必须持有这条权限才能接
       #   配合 main03b 里的 lp 命令，实现"做完 03B 才解锁循环任务"
       permission: 'example.zhulong.daily'

@@ -44,6 +44,23 @@ public class QuestTree {
     /** 自定义空格占位符材质（Oraxen ID 或原版 material 名），null 表示用默认背景板。 */
     private final String layoutEmptyIcon;
 
+    /**
+     * 本树来自哪个文件（如 {@code zhulong.yml}）。由 {@code QuestTreeLoader} 回填，
+     * 仅用于诊断 —— 树 ID 冲突时能明确告诉运维是哪两个文件撞了
+     * （树 ID 取自文件内的 {@code id:} 字段，与文件名无关，两者不一致是常见误配）。
+     */
+    private String sourceFile;
+
+    /** 回填来源文件名（诊断用）。 */
+    public void setSourceFile(String sourceFile) {
+        this.sourceFile = sourceFile;
+    }
+
+    /** 来源文件名，未回填时返回 {@code "未知"}。 */
+    public String getSourceFile() {
+        return sourceFile == null ? "未知" : sourceFile;
+    }
+
     public QuestTree(String id, String name, String description, String icon, int order,
                      boolean enabled, Prerequisite prerequisites, int mainQuestLimit,
                      int sideQuestLimit, boolean lockedByDefault, Map<String, Quest> quests) {
