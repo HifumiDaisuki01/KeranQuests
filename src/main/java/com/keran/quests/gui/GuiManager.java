@@ -449,6 +449,14 @@ public class GuiManager implements Listener {
             iconId = cfg("gui.icons.unknown", "quest_ui_unknown");
             fallback = Material.GRAY_DYE;
             stateLabel = "&8？？？";
+        } else if (unlock == QuestManager.UnlockStatus.EXCLUDED) {
+            // 被互斥淘汰（抉择选走了另一条线）：
+            // 用「失败」图标 + 灰色，语义上最贴切 —— 这条线确实已经没机会了。
+            // 这里**不显示 ？？？**，因为玩家需要知道"是哪条线没了"，
+            // 藏着只会让人反复来点。
+            iconId = cfg("gui.icons.failed", "quest_ui_failed");
+            fallback = Material.GRAY_DYE;
+            stateLabel = "&8[✖] 不可接取";
         } else if (unlock == QuestManager.UnlockStatus.LOCKED_KNOWN) {
             iconId = cfg("gui.icons.locked", "quest_ui_locked");
             fallback = Material.GRAY_DYE;
@@ -459,6 +467,10 @@ public class GuiManager implements Listener {
             stateLabel = "&e[❗] 可接取";
         }
 
+        boolean exclud = unlock == QuestManager.UnlockStatus.EXCLUDED;
+        boolean selfActive = state == QuestState.ACTIVE;
+        // hidden 只用于「？？？」渲染。被淘汰的任务要显示真名（玩家得知道没的是哪条线），
+        // 所以即便它配了 hidden: true，也不能算 hidden。
         boolean hidden = unlock == QuestManager.UnlockStatus.LOCKED_HIDDEN && state == QuestState.LOCKED;
 
         List<String> lore = new ArrayList<>();
@@ -484,8 +496,18 @@ public class GuiManager implements Listener {
                 lore.add("&7缺少前置：");
                 lore.addAll(describeQuestPrerequisites(player, quest));
             }
-            lore.add("");
-            lore.add("&7点击查看详情");
+            if (exclud && !selfActive) {
+                // 被互斥淘汰：说清楚"为什么没了"，别让玩家反复来试。
+                // 原因是动态算的（可能来自 exclusive_group，也可能来自 exclusive_with），
+                // 所以直接取 getExcludeReason 的文本。
+                lore.add("");
+                String reason = plugin.getQuestManager().getExcludeReason(player, quest);
+                lore.add(reason == null ? "&c这条路线已不可用。" : reason);
+            }
+            if (!exclud) {
+                lore.add("");
+                lore.add("&7点击查看详情");
+            }
         } else {
             lore.add("");
             lore.add("&8完成前置任务以解锁…");
@@ -501,7 +523,10 @@ public class GuiManager implements Listener {
         // hidden 为真时任务显示为「？？？」，此前的实现无条件挂 open_quest，
         // 导致玩家点 ？？？ 就能看到完整的第一阶段详情，可见性形同虚设。
         // 这里不挂 action，onClick 取不到标识就会直接返回，点不动。
-        if (!hidden) {
+        //
+        // 被淘汰（EXCLUDED）的任务同样不让点：详情页里有「接取」按钮，
+        // 点进去只会撞上 canAccept 的互斥提示，白跑一趟。
+        if (!hidden && !exclud) {
             item.action("open_quest", quest.getFullId());
         }
         return item.build();

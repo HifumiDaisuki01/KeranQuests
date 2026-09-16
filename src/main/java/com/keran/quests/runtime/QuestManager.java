@@ -55,7 +55,18 @@ public class QuestManager {
         /** 未解锁，但前置本身可见 —— 可以告诉玩家缺什么 */
         LOCKED_KNOWN,
         /** 未解锁，且前置本身也是锁的 —— 显示 ？？？ */
-        LOCKED_HIDDEN
+        LOCKED_HIDDEN,
+        /**
+         * 已被互斥淘汰 —— 玩家在抉择里选了另一条线，或接取了同组的别的任务。
+         *
+         * <p>为什么要单独一态：这类任务的「不可接取」是**永久且确定**的
+         * （比如抉择分支），和「前置还没做完」有本质区别。此前它们被当成
+         * 普通未解锁处理，配上 {@code hidden: true} 就显示成「？？？ / 完成前置
+         * 任务以解锁…」——既误导（玩家以为做完前置就能接），又看不到任务名。
+         *
+         * <p>现在单独拎出来，GUI 会显示真实任务名 + 「✖ 不可接取」+ 具体原因。
+         */
+        EXCLUDED
     }
 
     /**
@@ -188,25 +199,51 @@ public class QuestManager {
 
     /** 判定互斥。 */
     private boolean checkExclusive(Player player, Quest quest) {
+        return getExcludeReason(player, quest) == null;
+    }
+
+    /**
+     * 判定互斥并返回「为什么被排除」的原因文本；不互斥时返回 {@code null}。
+     *
+     * <p>抽出来是为了让 GUI 能显示具体原因（此前只有布尔值，界面只能说
+     * 「未解锁」，玩家不知道是前置没做还是被抉择淘汰了）。
+     *
+     * <p>两种互斥来源：
+     * <ul>
+     *   <li>{@code exclusive_group} —— 同组只能有一条线被接取/完成。
+     *       抉择分支走的就是这条：{@code ChoiceManager.choose()} 会写入
+     *       {@code exclusive:<组名>} 树状态，于是没被选中的那条线在这里被判定为排除。</li>
+     *   <li>{@code exclusive_with} —— 显式列出不能共存的任务。</li>
+     * </ul>
+     *
+     * @return 原因文本；{@code null} 表示不互斥（可接）
+     */
+    public String getExcludeReason(Player player, Quest quest) {
         PlayerData data = plugin.getPlayerData(player);
         String group = quest.getExclusiveGroup();
 
-        // 组内是否已有别的任务被接取/完成
+        // ① 组内是否已有别的任务被接取/完成
         if (group != null && !group.isBlank()) {
             String taken = data.getTreeState(quest.getTreeId(), "exclusive:" + group);
             if (taken != null && !taken.equalsIgnoreCase(quest.getId())) {
-                return false;
+                // taken 里存的是任务短 ID（如 main03a），补上树前缀以便显示真名
+                Quest tq = plugin.getTreeLoader().resolveQuest(normalize(quest.getTreeId(), taken));
+                String takenName = tq == null ? taken : Text.strip(tq.getName());
+                return Text.color("&c你已选择了「&f" + takenName + "&c」，这条路线不再可用。");
             }
         }
-        // 显式互斥列表
+
+        // ② 显式互斥列表
         for (String other : quest.getExclusiveWith()) {
             QuestProgress op = data.getProgress(normalize(quest.getTreeId(), other));
             if (op != null && (op.getState() == QuestState.ACTIVE
                     || op.getState() == QuestState.COMPLETED)) {
-                return false;
+                Quest oq = plugin.getTreeLoader().resolveQuest(normalize(quest.getTreeId(), other));
+                String otherName = oq == null ? other : Text.strip(oq.getName());
+                return Text.color("&c你正在进行「&f" + otherName + "&c」，两者不能同时进行。");
             }
         }
-        return true;
+        return null;
     }
 
     /** 把短名补全成 "tree:quest" 形式。 */
@@ -325,8 +362,33 @@ public class QuestManager {
         PlayerData data = plugin.getPlayerData(player);
         if (data.isCompleted(quest.getFullId())) return UnlockStatus.UNLOCKED;
 
+        // 正在进行中的任务同样算「已解锁」。
+        //
+        // 为什么必须单独判：抉择分支都配了 hidden: true 且没有前置，
+        // 玩家接取后如果只靠下面的 `pre == null → isHidden() ? LOCKED_HIDDEN`
+        // 兜底，就会得到一个「任务正在进行中、解锁状态却是？？？」的自相矛盾结果。
+        // GUI 的 buildQuestNode 因为先判 state == ACTIVE 侥幸没露馅，但任何
+        // 直接查 getUnlockStatus 的调用方（如 /kq debug 总览）都会被误导。
+        QuestProgress self = data.getProgress(quest.getFullId());
+        if (self != null && self.getState() == QuestState.ACTIVE) {
+            return UnlockStatus.UNLOCKED;
+        }
+
         // 整个任务树被锁定时，同样显示为未解锁
         if (!isTreeUnlocked(data, quest)) return UnlockStatus.LOCKED_HIDDEN;
+
+        // ---- 互斥优先判定 ----
+        //
+        // 必须放在 hidden 判断**之前**：抉择分支（main03a / main03b）都配了
+        // hidden: true，如果先走 hidden 分支，被淘汰的那条线就会一直显示成
+        // 「？？？ / 完成前置任务以解锁…」，玩家会以为做完前置就能接 ——
+        // 实际上它已经永久不可用了。
+        //
+        // 而且这两条线本身没有 prerequisites，`pre == null` 那条分支同样会
+        // 把它们判成 LOCKED_HIDDEN，所以互斥判定必须排在这两者前面。
+        if (getExcludeReason(player, quest) != null) {
+            return UnlockStatus.EXCLUDED;
+        }
 
         // 无前置时：隐藏任务仍显示为 LOCKED_HIDDEN，普通任务直接 UNLOCKED
         if (pre == null || pre.isEmpty()) {

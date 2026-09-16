@@ -437,6 +437,56 @@ public class KqCommand implements CommandExecutor, TabCompleter {
                 }
             }
         }
+
+        // ---- 解锁判定自检（v1.0.8）----
+        //
+        // GUI 里任务显示成「？？？」还是「✖ 不可接取」，取决于 getUnlockStatus
+        // 这个三/四态判定。此前这条判定对玩家不可见，出问题只能靠截图猜。
+        // 这里把**整棵树所有任务**的判定结果直接打出来，一眼看出是哪种情况。
+        if (args.length >= 3) {
+            Quest q = plugin.getTreeLoader().resolveQuest(args[2]);
+            if (q != null && target.isOnline()) {
+                var st = plugin.getQuestManager().getUnlockStatus(target.getPlayer(), q);
+                Text.sendRaw(sender, " &7── 解锁判定 ──");
+                Text.sendRaw(sender, "  &7任务：&f" + q.getFullId());
+                Text.sendRaw(sender, "  &7状态：&f" + st);
+                String ex = plugin.getQuestManager().getExcludeReason(target.getPlayer(), q);
+                Text.sendRaw(sender, "  &7互斥原因：&f" + (ex == null ? "无" : ex));
+                String can = plugin.getQuestManager().canAccept(target.getPlayer(), q);
+                Text.sendRaw(sender, "  &7可接取：&f" + (can == null ? "可以" : can));
+            }
+        }
+
+        // ---- 整树解锁总览（v1.0.8）----
+        //
+        // 排查「抉择后另一条线该显示成什么」时，逐条查太慢。
+        // 给一个整树扫描：把树里每个任务对当前玩家的判定一次性列出来，
+        // 一眼就能确认被淘汰的分支是否落到了 EXCLUDED。
+        if (target.isOnline()) {
+            Player online = target.getPlayer();
+            Text.sendRaw(sender, " &7── 整树解锁总览 ──");
+            for (QuestTree t : plugin.getTreeLoader().getTrees()) {
+                for (Quest qq : t.getQuests()) {
+                    var st = plugin.getQuestManager().getUnlockStatus(online, qq);
+                    String ex = plugin.getQuestManager().getExcludeReason(online, qq);
+                    String mark;
+                    if (st == com.keran.quests.runtime.QuestManager.UnlockStatus.EXCLUDED) {
+                        mark = "&8✖不可接取";
+                    } else if (st == com.keran.quests.runtime.QuestManager.UnlockStatus.LOCKED_HIDDEN) {
+                        mark = "&8？？？";
+                    } else if (st == com.keran.quests.runtime.QuestManager.UnlockStatus.LOCKED_KNOWN) {
+                        mark = "&c未解锁";
+                    } else {
+                        mark = "&a可接取";
+                    }
+                    Text.sendRaw(sender, "  &7" + t.getId() + ":" + qq.getId()
+                            + " &8| &f" + st + " &8| " + mark
+                            + (ex != null ? " &8| &7" + Text.strip(ex) : ""));
+                }
+            }
+        } else {
+            Text.sendRaw(sender, " &7（玩家不在线，跳过整树解锁总览）");
+        }
         if (!data.getAllTreeState().isEmpty()) {
             Text.sendRaw(sender, " &7树状态：");
             for (var e : data.getAllTreeState().entrySet()) {
