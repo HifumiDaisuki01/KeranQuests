@@ -23,3 +23,8 @@ Thumbs.db
 # 测试用临时文件
 testclient/node_modules/
 testclient/*.log
+
+# 内部开发文档（规格书 / 运维手册 / 修复记录）——
+# 面向开发与运维，不随玩家仓库分发。
+# 文件仍在本地保留，只是不再纳入版本控制。
+docs/
