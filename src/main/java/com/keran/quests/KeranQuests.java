@@ -3,6 +3,7 @@ package com.keran.quests;
 import com.keran.quests.command.KaCommand;
 import com.keran.quests.command.KqCommand;
 import com.keran.quests.command.KquestsCommand;
+import com.keran.quests.command.KqdlgCommand;
 import com.keran.quests.config.QuestTreeLoader;
 import com.keran.quests.gui.GuiManager;
 import com.keran.quests.hook.OraxenHook;
@@ -35,6 +36,14 @@ import org.bukkit.scheduler.BukkitTask;
  */
 public class KeranQuests extends JavaPlugin {
 
+    /** 单例引用。用于静态上下文（如配置解析工具）访问插件实例。 */
+    private static KeranQuests instance;
+
+    /** 获取插件实例（可能为 null —— 仅在插件未启用时）。 */
+    public static KeranQuests getInstance() {
+        return instance;
+    }
+
     private QuestTreeLoader treeLoader;
     private PlayerDataStore playerDataStore;
     private QuestManager questManager;
@@ -54,6 +63,7 @@ public class KeranQuests extends JavaPlugin {
 
     @Override
     public void onEnable() {
+        instance = this;
         // 1. 配置
         saveDefaultConfig();
         this.actionKey = new NamespacedKey(this, "gui_action");
@@ -127,6 +137,7 @@ public class KeranQuests extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        instance = null;
         if (flushTask != null) {
             flushTask.cancel();
             flushTask = null;
@@ -159,6 +170,11 @@ public class KeranQuests extends JavaPlugin {
             KquestsCommand exec = new KquestsCommand(this);
             kquests.setExecutor(exec);
             kquests.setTabCompleter(exec);
+        }
+        // 对话点击回调（聊天栏可点击文字触发）
+        PluginCommand kqdlg = getCommand("kqdlg");
+        if (kqdlg != null) {
+            kqdlg.setExecutor(new KqdlgCommand(this));
         }
     }
 

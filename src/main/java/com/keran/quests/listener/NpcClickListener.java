@@ -55,9 +55,18 @@ public class NpcClickListener implements Listener {
             talked = plugin.getDialogueRunner().startDialogue(player, npcName);
         }
 
-        // 2. 无论有没有对话配置，都要推进 NPC_TALK 类的任务要求
-        //    （有的 NPC 不需要台词，只是个"报到点"）
-        boolean questAdvanced = plugin.getQuestManager().fireNpcTalk(player, npcName);
+        // 2. 推进 NPC_TALK 类的任务要求。
+        //
+        // 【语义】分两种情况，不能一律在右键瞬间推进：
+        //   · 该 NPC 配了对话 → 由 DialogueRunner.finish() 在【对话全部播完】
+        //     时推进。理由：剧情还没走完就把任务判成"谈过了"，会出现
+        //     「对话刚播第一句，任务奖励已经发了」——实测中真实踩到。
+        //   · 该 NPC 没配对话 → 它只是个"报到点"，右键即算完成。
+        // 两种情况都只在 talked == false 时在此处推进，避免重复触发。
+        boolean questAdvanced = false;
+        if (!talked) {
+            questAdvanced = plugin.getQuestManager().fireNpcTalk(player, npcName);
+        }
 
         // 3. 对话结束后给一句引导（仅在确实有任务被推进时）
         if (questAdvanced && !talked) {

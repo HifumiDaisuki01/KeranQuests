@@ -35,6 +35,14 @@ commands:
     aliases: [kqapi]
     permission: kq.api
     permission-message: '&c该指令仅供第三方插件/控制台调用。'
+  # 对话点击回调专用 —— 由聊天栏里「可点击文字」自动触发，
+  # 玩家不需要也不应该手打。参数由 DialogText 拼装，会话状态由
+  # DialogueRunner 校验，因此这里给 kq.use 即可，无越权风险。
+  kqdlg:
+    description: 对话点击回调（内部使用）
+    usage: /kqdlg <pick|choose|end> ...
+    permission: kq.use
+    permission-message: '&c你没有权限。'
 
 permissions:
   kq.use:
