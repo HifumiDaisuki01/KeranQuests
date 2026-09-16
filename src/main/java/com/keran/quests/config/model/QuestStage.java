@@ -24,14 +24,23 @@ public class QuestStage {
     private final String choiceGroup;
     private final String choiceTitle;
     private final List<Choice> choices;
+    /**
+     * 阶段简介（可选）。支持多行、支持 &amp; 颜色代码。
+     *
+     * <p>用于在阶段格子的 lore 里补一段叙事 / 说明文字，
+     * 例如"你已经来到了营地，一个熟悉的身影出现了……"。
+     */
+    private final String description;
 
     private QuestStage(String id, String name, StageMode mode, int need,
                        List<Requirement> requirements, List<String> commandsOnComplete,
-                       boolean choice, String choiceGroup, String choiceTitle, List<Choice> choices) {
+                       boolean choice, String choiceGroup, String choiceTitle, List<Choice> choices,
+                       String description) {
         this.id = id;
         this.name = name;
         this.mode = mode;
         this.need = need;
+        this.description = description == null ? "" : description;
         this.requirements = requirements == null ? new ArrayList<>() : requirements;
         this.commandsOnComplete = commandsOnComplete == null ? new ArrayList<>() : commandsOnComplete;
         this.choice = choice;
@@ -86,8 +95,11 @@ public class QuestStage {
                 || !choices.isEmpty();
         String choiceGroup = sec.getString("choice_group", null);
         String choiceTitle = sec.getString("choice_title", "抉择");
+        // 阶段简介（可选）
+        String description = sec.getString("description", "");
 
-        return new QuestStage(id, name, mode, need, reqs, cmds, choice, choiceGroup, choiceTitle, choices);
+        return new QuestStage(id, name, mode, need, reqs, cmds, choice, choiceGroup, choiceTitle, choices,
+                description);
     }
 
     /** 把 yml 里 list 内的 Map 元素转成 ConfigurationSection。 */
@@ -145,6 +157,11 @@ public class QuestStage {
 
     public List<Choice> getChoices() {
         return choices;
+    }
+
+    /** 阶段简介（可选，可能为空串）。 */
+    public String getDescription() {
+        return description;
     }
 
     /** 抉择项。 */

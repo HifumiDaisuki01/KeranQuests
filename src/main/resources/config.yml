@@ -78,14 +78,9 @@ gui:
   title_quest_list: '&8任务列表 · {tree}'
   title_quest_detail: '&8任务详情 · {quest}'
   title_choice: '&8[!] 抉择 · {title}'
-  # 抉择是否必须按住 Shift 点击才生效（防止误点）
-  choice_require_shift: true
-  # 抉择界面的自动重开间隔（秒）。
-  # 抉择阶段靠"原地停留"等待玩家选择。如果玩家关掉界面，插件会在这个间隔后
-  # 自动帮他重新打开，这样任务不会卡死（旧版只能退出重进才能恢复）。
-  # 界面当前已开着时不会重复弹。填 0 则关闭自动重开（只保留「继续抉择」按钮和
-  # /kq choice 指令两条手动途径）。
-  choice_reopen_interval_sec: 5
+  # 抉择采用「两级确认」防误触：第一下点击只是选中，3 秒内再点一次才生效。
+  # 确认窗口时长（毫秒）。设小一点更接近"点一下就定"，设大一点更防手滑。
+  choice_confirm_ms: 3000
   # 图标配置：值为 Oraxen 物品 ID；Oraxen 不可用时回落到内置材质
   icons:
     bg: 'quest_ui_bg'

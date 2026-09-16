@@ -6,6 +6,7 @@ import com.keran.quests.config.model.QuestStage;
 import com.keran.quests.config.model.enums.QuestType;
 import com.keran.quests.player.PlayerData;
 import com.keran.quests.player.QuestProgress;
+import com.keran.quests.runtime.QuestManager;
 import com.keran.quests.util.Text;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
@@ -82,6 +83,7 @@ public class KquestsCommand implements CommandExecutor, TabCompleter {
             case "force" -> doForceAccept(sender, args);
             case "trigger" -> doTrigger(args);
             case "complete" -> doComplete(sender, args);
+            case "progress" -> doProgress(sender, args);
             case "stage" -> doStage(sender, args);
             case "fail" -> doFail(sender, args);
             case "reset" -> doReset(sender, args);
@@ -217,6 +219,85 @@ public class KquestsCommand implements CommandExecutor, TabCompleter {
         plugin.getQuestManager().complete(p, q);
         if (sender instanceof Player sp && !sp.equals(p)) {
             Text.send(sender, "&a已为 " + p.getName() + " 完成任务：" + Text.strip(q.getName()));
+        }
+    }
+
+    // ==================================================================
+    //  progress —— 强制结算当前阶段（供第三方插件调用）
+    // ==================================================================
+
+    /**
+     * 强制结算"当前阶段"并推进到下一阶段。
+     *
+     * <p><b>解决什么问题</b>：有些阶段的完成条件插件检测不了，需要外部系统通知。
+     * 例如"打开门禁"由第三方插件判定，它需要一个指令告诉本插件
+     * 「阶段 2 完事了，让玩家进阶段 3 吧」。
+     *
+     * <p><b>与另两个指令的区别</b>：
+     * <ul>
+     *   <li>{@code complete} → 强制完成<b>整个任务</b>（跳到末尾并结算全任务奖励）</li>
+     *   <li>{@code stage}    → <b>跳到</b>第 N 阶段（跳过中间阶段，被跳过的阶段不结算、不记账）</li>
+     *   <li>{@code progress} → 正常结算<b>当前阶段</b>（跑完成命令、记 completed_stages、播报），
+     *       然后推进到下一阶段 —— 就是"帮玩家把这个阶段做完了"</li>
+     * </ul>
+     *
+     * <p><b>用法</b>：
+     * <pre>
+     *   /kquests progress &lt;玩家&gt; &lt;任务ID&gt;            # 结算当前阶段
+     *   /kquests progress &lt;玩家&gt; &lt;任务ID&gt; &lt;阶段索引&gt;  # 结算指定阶段（必须等于当前阶段，防错推）
+     * </pre>
+     *
+     * <p>不传阶段索引时只结算"当前阶段"，最省事，第三方插件推荐用这种形式 ——
+     * 插件不需要知道玩家的阶段索引，只要在事件发生时喊一声即可。
+     *
+     * <p>当前阶段是抉择节点时会被拒绝（抉择必须由玩家点选，否则会断掉分支链），
+     * 此时可改用 {@code /kq choice <玩家>} 打开界面让玩家选。
+     */
+    private void doProgress(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            text(sender, "&e用法：/kquests progress <玩家> <任务ID> [阶段索引]");
+            return;
+        }
+        Player p = Bukkit.getPlayerExact(args[1]);
+        if (p == null) {
+            // 第三方插件可能在人已下线后才回调，这里给出明确原因而不是静默失败
+            text(sender, "&c玩家 " + args[1] + " 不在线，无法结算阶段。");
+            return;
+        }
+        Quest q = plugin.getTreeLoader().resolveQuest(args[2]);
+        if (q == null) {
+            text(sender, "&c任务不存在：" + args[2]);
+            return;
+        }
+
+        int stageIndex = -1;   // 负数 = 结算当前阶段
+        if (args.length >= 4) {
+            try {
+                stageIndex = Integer.parseInt(args[3]);
+            } catch (NumberFormatException e) {
+                text(sender, "&c阶段索引必须是数字：" + args[3]);
+                return;
+            }
+        }
+
+        QuestManager.StageResult r =
+                plugin.getQuestManager().forceCompleteCurrentStage(p, q, stageIndex);
+
+        switch (r) {
+            case OK -> text(sender, "&a已结算 " + p.getName() + " 的阶段，任务 "
+                    + q.getFullId() + " 当前位于阶段 "
+                    + (plugin.getQuestManager().getStageIndex(p, q) + 1) + "。");
+            case NO_PROGRESS -> text(sender, "&c" + p.getName() + " 没有接取任务 " + q.getFullId() + "。");
+            case NOT_ACTIVE -> text(sender, "&c任务 " + q.getFullId() + " 不在进行中（可能已完成/失败/放弃）。");
+            case ALL_DONE -> text(sender, "&c任务 " + q.getFullId() + " 的所有阶段都已完成，没有可结算的阶段。");
+            case IS_CHOICE -> {
+                text(sender, "&e当前阶段是抉择节点，必须由玩家自己选择，不能强制结算。");
+                text(sender, "&7请用 &f/kq choice " + p.getName() + " &7打开抉择界面，"
+                        + "或让玩家从任务详情页的「继续抉择」按钮进入。");
+            }
+            case ALREADY_PAST -> text(sender, "&c指定的阶段索引已经结算过了（当前已在其之后）。");
+            case NOT_CURRENT -> text(sender, "&c只能结算当前阶段：请先结算前面的阶段，"
+                    + "或省略索引让插件自动结算当前阶段。");
         }
     }
 
@@ -458,8 +539,9 @@ public class KquestsCommand implements CommandExecutor, TabCompleter {
         Text.sendRaw(sender, " &f/" + label + " accept <玩家> <任务ID> &7（尊重前置与上限）");
         Text.sendRaw(sender, " &f/" + label + " force <玩家> <任务ID> &7（无视前置与上限）");
         Text.sendRaw(sender, " &f/" + label + " trigger <玩家> <key> &7← 最常用");
-        Text.sendRaw(sender, " &f/" + label + " complete <玩家> <任务ID>");
-        Text.sendRaw(sender, " &f/" + label + " stage <玩家> <任务ID> <序号>");
+        Text.sendRaw(sender, " &f/" + label + " complete <玩家> <任务ID> &7（完成整个任务）");
+        Text.sendRaw(sender, " &f/" + label + " progress <玩家> <任务ID> [序号] &7（★ 结算当前阶段并推进）");
+        Text.sendRaw(sender, " &f/" + label + " stage <玩家> <任务ID> <序号> &7（跳到第 N 阶段）");
         Text.sendRaw(sender, " &f/" + label + " fail <玩家> <任务ID> [原因]");
         Text.sendRaw(sender, " &f/" + label + " reset <玩家> <任务ID>");
         Text.sendRaw(sender, " &f/" + label + " talk <玩家> <NPC名>");
@@ -477,8 +559,8 @@ public class KquestsCommand implements CommandExecutor, TabCompleter {
                                       @NotNull String alias, @NotNull String[] args) {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
-            out.addAll(Arrays.asList("accept", "force", "trigger", "complete", "stage", "fail",
-                    "reset", "talk", "refresh", "query", "tree", "help"));
+            out.addAll(Arrays.asList("accept", "force", "trigger", "complete", "progress", "stage",
+                    "fail", "reset", "talk", "refresh", "query", "tree", "help"));
         } else if (args.length == 2) {
             Bukkit.getOnlinePlayers().forEach(p -> out.add(p.getName()));
         } else if (args.length == 3) {
@@ -490,6 +572,18 @@ public class KquestsCommand implements CommandExecutor, TabCompleter {
             } else {
                 plugin.getTreeLoader().getAllQuests().forEach(q -> out.add(q.getFullId()));
                 plugin.getTreeLoader().getAllQuests().forEach(q -> out.add(q.getId()));
+            }
+        } else if (args.length == 4) {
+            // progress / stage 的第 4 个参数是阶段索引，给出候选数字
+            String sub = args[0].toLowerCase();
+            if (sub.equals("progress") || sub.equals("stage")) {
+                Player target = Bukkit.getPlayerExact(args[1]);
+                Quest q = plugin.getTreeLoader().resolveQuest(args[2]);
+                if (target != null && q != null) {
+                    int cur = plugin.getQuestManager().getStageIndex(target, q);
+                    for (int i = 0; i < q.getStageCount(); i++) out.add(String.valueOf(i));
+                    if (sub.equals("progress") && cur >= 0) out.remove(String.valueOf(cur));
+                }
             }
         }
         String last = args[args.length - 1].toLowerCase();

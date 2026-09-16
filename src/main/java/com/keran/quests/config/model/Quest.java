@@ -18,6 +18,13 @@ public class Quest {
     private final String treeId;
     private final String id;
     private final String name;
+    /**
+     * 任务简介（可选）。支持多行、支持 &amp; 颜色代码。
+     *
+     * <p>与任务树的 {@code description} 同名字段，用于在任务详情页的书本 lore 里
+     * 补一段叙事 / 说明文字。不写则不显示，不影响界面布局。
+     */
+    private final String description;
     private final QuestType type;
     private final int weight;
     private final String icon;
@@ -108,10 +115,11 @@ public class Quest {
                   List<ForbiddenRegion> forbiddenRegions, int maxKills, List<String> maxKillTypes,
                   ResetMode resetOnFail, String unlockTree, boolean hidden,
                   boolean abandonAllowed, List<String> abandonCommands,
-                  String abandonMessage, int abandonCooldown) {
+                  String abandonMessage, int abandonCooldown, String description) {
         this.treeId = treeId;
         this.id = id;
         this.name = name;
+        this.description = description == null ? "" : description;
         this.type = type;
         this.weight = weight;
         this.icon = icon;
@@ -285,7 +293,8 @@ public class Quest {
                 rewardCommands, repeatable, cooldown, resetOnComplete, exclusiveGroup,
                 exclusiveWith, terminatesTree, failOnDeath, timeLimit, failCooldown,
                 forbidden, maxKills, maxKillTypes, resetOnFail, unlockTree, hidden,
-                abandonAllowed, abandonCommands, abandonMessage, abandonCooldown);
+                abandonAllowed, abandonCommands, abandonMessage, abandonCooldown,
+                sec.getString("description", ""));
     }
 
     private static ConfigurationSection toSection(Object obj) {
@@ -314,6 +323,11 @@ public class Quest {
 
     public String getId() {
         return id;
+    }
+
+    /** 任务简介（可选，可能为空串）。 */
+    public String getDescription() {
+        return description;
     }
 
     public String getName() {

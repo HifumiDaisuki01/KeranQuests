@@ -119,6 +119,11 @@ quests:
     weight: 60
     icon: 'quest_ui_side'
     stage_visibility: FULL
+    # 任务简介（可选）：显示在任务详情页书本的 lore 里，奖励上方。
+    # 用 | 可以写多行；支持 & 颜色代码。不写则整段不显示。
+    description: |-
+      &7营地的篝火旁传来一阵骚动，
+      &7你已经来到了营地，一个熟悉的身影出现了……
 
     prerequisites:
       quest_completed_all:
@@ -128,6 +133,10 @@ quests:
       - id: rescue
         name: '&f救下遇险者'
         mode: ALL                 # 两个条件都要满足
+        # 阶段简介（可选）：显示在阶段格子的 lore 里，要求列表下方。
+        description: |-
+          &8幸存者被围在废墟里，先清掉周围的怪物，
+          &8再上前与他搭话。
         requirements:
           - type: mm_kill
             mobs: ['example_wanderer']

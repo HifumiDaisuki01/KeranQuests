@@ -426,13 +426,14 @@ public class KqCommand implements CommandExecutor, TabCompleter {
             Quest q = plugin.getTreeLoader().resolveQuest(e.getKey());
             if (q != null) {
                 Text.sendRaw(sender, "      已完成阶段：&f" + sortedSet(p.getCompletedStages())
-                        + " &7已处理阶段：&f" + sortedSet(p.getHandledStages()));
+                        + " &7已处理阶段：&f" + sortedSet(p.getHandledStages())
+                        + " &7已弹过抉择：&f" + sortedSet(p.getChoiceGuiShownStages()));
                 int si = p.getStageIndex();
                 if (p.getState() == QuestState.ACTIVE && si < q.getStageCount()
                         && q.getStages().get(si).isChoice()) {
-                    Text.sendRaw(sender, "      &e当前阶段是抉择节点，等待玩家做出选择。"
-                            + " &7界面会自动重开；也可用 /kq choice "
-                            + target.getName() + " 立即重开。");
+                    Text.sendRaw(sender, "      &e当前阶段是抉择节点，等待玩家做出选择。");
+                    Text.sendRaw(sender, "      &7玩家可点任务详情页的「继续抉择」按钮，"
+                            + "或用 &f/kq choice " + target.getName() + " &7重开界面。");
                 }
             }
         }

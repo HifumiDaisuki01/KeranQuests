@@ -38,40 +38,8 @@ public class QuestManager {
 
     private final KeranQuests plugin;
 
-    /**
-     * 抉择界面最近一次重弹的时间戳（毫秒），按玩家记录。
-     *
-     * <p>抉择阶段会被 RegionRunner 每秒轮询到，而它又需要"能重新打开界面"，
-     * 所以必须节流，否则关掉界面会被每秒弹一次，玩家会被烦死。
-     * 间隔由 {@code gui.choice_reopen_interval_sec} 控制（默认 5 秒）。
-     */
-    private final java.util.Map<java.util.UUID, Long> choiceReopenAt = new java.util.concurrent.ConcurrentHashMap<>();
-
     public QuestManager(KeranQuests plugin) {
         this.plugin = plugin;
-    }
-
-    /**
-     * 玩家当前是否正开着某个抉择界面。
-     *
-     * <p>用标题特征判断（标题取 {@code gui.title_choice} 的固定部分），
-     * 这样不用给 Inventory 打额外标记。目的是避免"玩家正在看着界面时又弹一次"。
-     * 判断失败也不影响功能 —— 只是可能多弹一次，节流仍在兜底。
-     */
-    private boolean choiceGuiVisible(Player player) {
-        try {
-            String raw = plugin.getConfig().getString("gui.title_choice", "\u26a0 \u6289\u62e9 \u00b7 {title}");
-            // 取标题中 "{title}" 之前的部分作为固定前缀，忽略目标玩家染色的差异
-            int cut = raw.indexOf("{title}");
-            String prefix = cut > 0 ? raw.substring(0, cut) : raw;
-            prefix = com.keran.quests.util.Text.strip(prefix);
-            String title = com.keran.quests.util.Text.strip(
-                    player.getOpenInventory().getTitle());
-            if (prefix.isBlank()) return false;
-            return title.startsWith(prefix);
-        } catch (Throwable t) {
-            return false;
-        }
     }
 
     // ==================================================================
@@ -498,45 +466,47 @@ public class QuestManager {
 
         // 防重复：RegionRunner 每秒都会调用本方法。
         //
-        // ★ 两类阶段要分开处理：
-        //   - 普通阶段：handled 过就直接返回（原行为）。
-        //   - 抉择阶段：抉择靠"原地停留"等玩家选，玩家很可能先关掉界面、稍后再决定。
-        //     若在这里被 handled 拦死，界面就再也弹不出来了（只能退出重进，
-        //     因为 handledStages 不落盘、重连才清空）—— 这就是 v1.0.4 及之前
-        //     "卡在抉择做不了选择"的根因。
-        //     所以抉择阶段要放行，但**只放行重开界面那部分**，
-        //     下面的完成处理（打标记/发命令/播报）仍然只跑一次，
-        //     否则每秒轮询会重复播报、重复执行 commands_on_complete。
-        boolean choiceStage = stage.isChoice();
-        boolean alreadyHandled = p.isStageHandled(stageIdx);
+        // 阶段完成处理（打标记 / 发命令 / 播报）**只能跑一次**，
+        // 否则每秒轮询会重复播报、重复执行 commands_on_complete
+        // （若命令含给物品/货币，玩家能刷出天文数字）。
+        //
+        // ⚠ 历史坑：曾经为了让抉择节点能重开界面，
+        // 把守卫改成"抉择阶段直接放行整段逻辑"，结果完成处理也每秒重跑了一遍。
+        // 正确的分流方式是：一次性处理用 alreadyHandled 守住，
+        // 需要重复触发的行为单独写在守卫外面。
+        int stageIdxNow = stageIdx;
+        if (p.isStageHandled(stageIdxNow)) return false;
 
-        if (!choiceStage && alreadyHandled) return false;
+        // 阶段完成（一次性）
+        p.markStageHandled(stageIdxNow);
+        p.markStageCompleted(stageIdxNow);
+        runCommands(player, stage.getCommandsOnComplete(), quest, stage, null, null);
+        runCommands(player, quest.getOnStageComplete(), quest, stage, null, null);
 
-        if (!alreadyHandled) {
-            // 阶段完成（一次性）
-            p.markStageHandled(stageIdx);
-            p.markStageCompleted(stageIdx);
-            runCommands(player, stage.getCommandsOnComplete(), quest, stage, null, null);
-            runCommands(player, quest.getOnStageComplete(), quest, stage, null, null);
-
-            if (!silent) {
-                Text.send(player, plugin.getConfig().getString("messages.prefix", "")
-                        + plugin.prefixed("stage_completed", "stage_name", stage.getName()));
-            }
-            plugin.getPlayerDataStore().save(plugin.getPlayerData(player));
+        if (!silent) {
+            Text.send(player, plugin.getConfig().getString("messages.prefix", "")
+                    + plugin.prefixed("stage_completed", "stage_name", stage.getName()));
         }
+        plugin.getPlayerDataStore().save(plugin.getPlayerData(player));
 
-        // 抉择节点：暂停在这里等玩家选
-        if (choiceStage) {
+        // ---- 抉择节点：停在这里等玩家选，**不推进阶段索引** ----
+        //
+        // 抉择靠"原地停留"工作：阶段索引停在抉择那一格，等玩家点选后
+        // ChoiceManager.choose() 才写入 choice:xxx 树状态、推进阶段、解锁分支任务。
+        // 如果这里照常 advanceStage()，抉择就被跳过了 —— 分支任务永远接不到。
+        //
+        // 界面只在"第一次到达"时弹一次。玩家关掉后不再自动重弹（会打扰玩家），
+        // 改用两条手动途径回到这里：
+        //   · 任务详情页的「继续抉择」按钮（槽位 47）
+        //   · /kq choice <玩家> [任务ID]
+        if (stage.isChoice()) {
             p.setState(QuestState.ACTIVE);
-            // 节流：界面还开着就什么都不做；否则按冷却间隔重弹，
-            // 让「稍后再决定」这个承诺真正成立。
-            if (choiceGuiVisible(player)) return true;
-            long now = System.currentTimeMillis();
-            Long last = choiceReopenAt.get(player.getUniqueId());
-            int gap = plugin.getConfig().getInt("gui.choice_reopen_interval_sec", 5);
-            if (last == null || now - last >= gap * 1000L) {
-                choiceReopenAt.put(player.getUniqueId(), now);
+            // 用独立标记区分"首次到达"与"每秒轮询"：
+            // handled 表达的是"完成处理已执行"，语义上不能复用（抉择阶段被打上
+            // handled 后仍需要知道"界面弹没弹过"）。所以单独记一个 UI 标记。
+            if (!p.isChoiceGuiShown(stageIdxNow)) {
+                p.markChoiceGuiShown(stageIdxNow);
+                plugin.getPlayerDataStore().save(plugin.getPlayerData(player));
                 plugin.getChoiceManager().openChoice(player, quest, stage);
             }
             return true;
@@ -596,6 +566,123 @@ public class QuestManager {
             default:
                 return false;
         }
+    }
+
+    /**
+     * 查询某玩家在某任务上的当前阶段索引（从 0 起）。
+     *
+     * <p>供第三方插件与指令使用：返回 {@code quest.getStageCount()} 表示所有阶段已走完，
+     * 返回 {@code -1} 表示该玩家没有这个任务的进度。
+     */
+    public int getStageIndex(Player player, Quest quest) {
+        PlayerData data = plugin.getPlayerData(player);
+        QuestProgress p = data.getProgress(quest.getFullId());
+        return p == null ? -1 : p.getStageIndex();
+    }
+
+    /**
+     * 强制结算「当前阶段」并推进 —— 供第三方插件 / 管理员调用。
+     *
+     * <p>与 {@code checkStageCompletion} 的区别：
+     * <ul>
+     *   <li>{@code checkStageCompletion} 会**先校验条件**（击杀够不够、物品够不够…），
+     *       不满足就什么都不做。适合每秒轮询。</li>
+     *   <li>本方法**跳过条件校验**，直接把当前阶段判定为完成并推进。
+     *       适合"这个阶段的完成条件插件检测不了、需要外部系统通知"的场景，
+     *       例如「打开门禁」这种由第三方插件判定的事件。</li>
+     * </ul>
+     *
+     * <p>它会走完整的阶段完成流程：跑 {@code commands_on_complete} 与
+     * {@code on_stage_complete}、记入 completed_stages、播报阶段完成，
+     * 然后推进到下一阶段并递归检查（下一阶段若条件已满足会继续往后推）。
+     *
+     * @param stageIndex 期望结算的阶段索引；传负数表示"结算当前阶段"
+     * @return 结算结果，见 {@link StageResult}
+     */
+    public StageResult forceCompleteCurrentStage(Player player, Quest quest, int stageIndex) {
+        PlayerData data = plugin.getPlayerData(player);
+        QuestProgress p = data.getProgress(quest.getFullId());
+        if (p == null) return StageResult.NO_PROGRESS;
+        if (p.getState() != QuestState.ACTIVE) return StageResult.NOT_ACTIVE;
+
+        int cur = p.getStageIndex();
+        if (cur >= quest.getStageCount()) return StageResult.ALL_DONE;
+
+        // 指定了阶段索引：只允许结算"当前阶段"，避免插件传错索引把进度推乱。
+        // 这是刻意设计的约束 —— 若第三方插件认为需要结算的阶段与插件记录不一致，
+        // 说明双方状态已经不同步，应该报错让管理员介入，而不是顺着推。
+        if (stageIndex >= 0 && stageIndex != cur) {
+            return stageIndex < cur ? StageResult.ALREADY_PAST : StageResult.NOT_CURRENT;
+        }
+
+        QuestStage stage = quest.getStages().get(cur);
+
+        // 抉择节点：不能"强制完成"，否则会跳过玩家的选择、断掉分支链。
+        // 抉择必须由玩家点选（或管理员用 /kq choice 打开界面让玩家点）。
+        if (stage.isChoice()) return StageResult.IS_CHOICE;
+
+        // ---- 走完整完成流程 ----
+        p.markStageHandled(cur);
+        p.markStageCompleted(cur);
+        runCommands(player, stage.getCommandsOnComplete(), quest, stage, null, null);
+        runCommands(player, quest.getOnStageComplete(), quest, stage, null, null);
+        p.setState(QuestState.ACTIVE);
+        p.advanceStage();
+
+        int next = p.getStageIndex();
+        String nextName;
+        if (next >= quest.getStageCount()) {
+            nextName = "（无，本阶段是最后一个）";
+        } else {
+            nextName = "阶段 " + (next + 1) + " · " + quest.getStages().get(next).getName();
+        }
+
+        Text.send(player, plugin.getConfig().getString("messages.prefix", "")
+                + plugin.prefixed("stage_completed", "stage_name", stage.getName()));
+
+        data.markDirty();
+        plugin.getPlayerDataStore().save(data);
+
+        // 推进后递归检查下一阶段（下一阶段若无需条件或已满足，会继续往后推）。
+        // silent=true：上面的播报已经把"本阶段完成"说出去了，
+        // 这里再播报一次会让玩家看到连续两条，改成静默推进。
+        if (next < quest.getStageCount()) {
+            QuestStage ns = quest.getStages().get(next);
+            if (ns.isChoice() && !ns.getChoices().isEmpty()) {
+                // 下一阶段是抉择 → 直接把界面推给玩家，省得他自己找。
+                // 同时记下"界面已弹过"，这样玩家关掉后不会被自动重弹打扰
+                // （想再打开就用任务详情页的「继续抉择」按钮或 /kq choice）。
+                p.markChoiceGuiShown(next);
+                plugin.getPlayerDataStore().save(plugin.getPlayerData(player));
+                plugin.getChoiceManager().openChoice(player, quest, ns);
+            } else {
+                checkStageCompletion(player, quest, p, true);
+                plugin.getPlayerDataStore().save(plugin.getPlayerData(player));
+            }
+        } else {
+            // 已是最后一个阶段 → 结算整个任务
+            complete(player, quest);
+        }
+
+        return StageResult.OK;
+    }
+
+    /** {@link #forceCompleteCurrentStage} 的返回码。 */
+    public enum StageResult {
+        /** 已成功结算并推进。 */
+        OK,
+        /** 玩家没有这个任务的进度记录（未接取）。 */
+        NO_PROGRESS,
+        /** 任务不在进行中（已完成 / 已失败 / 已放弃）。 */
+        NOT_ACTIVE,
+        /** 所有阶段都已完成，没有"当前阶段"可结算。 */
+        ALL_DONE,
+        /** 当前阶段是抉择节点，必须由玩家点选，不能强制结算。 */
+        IS_CHOICE,
+        /** 传入的索引小于当前阶段索引 —— 该阶段早已结算过。 */
+        ALREADY_PAST,
+        /** 传入的索引大于当前阶段索引 —— 不能跳跃结算，请先结算当前阶段。 */
+        NOT_CURRENT
     }
 
     /** 完成整个任务：发奖励 + 执行命令 + 处理循环/终结。 */
@@ -877,13 +964,7 @@ public class QuestManager {
         if (quest.getFullId().equals(data.getTrackedQuest())) {
             data.setTrackedQuest(null);
         }
-        choiceReopenAt.remove(player.getUniqueId());
         plugin.getPlayerDataStore().save(data);
-    }
-
-    /** 玩家退出时清理抉择重弹节流记录，避免 UUID 条目无限累积。 */
-    public void forgetPlayer(java.util.UUID uuid) {
-        if (uuid != null) choiceReopenAt.remove(uuid);
     }
 
     // ==================================================================

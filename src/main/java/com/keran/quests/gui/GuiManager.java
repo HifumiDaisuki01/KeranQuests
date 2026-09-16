@@ -53,6 +53,52 @@ public class GuiManager implements Listener {
      */
     private final Map<UUID, Long> suppressClose = new HashMap<>();
 
+    /**
+     * 抉择界面的「待确认选择」登记：玩家 UUID -> 第一次点击的选项。
+     *
+     * <p>抉择采用**两级确认**防误触：第一下点击只是选中（界面 lore 变成"再次点击以确认"），
+     * 需要在 {@link #CHOICE_CONFIRM_WINDOW_MS} 内再点同一选项才真正生效。
+     *
+     * <p>为什么不用 Shift：手机端（基岩版 / 触屏启动器）根本没有 Shift 键，
+     * "按住 Shift 点击"这个前置条件在手机上永远无法满足，会把抉择彻底锁死。
+     */
+    private final Map<UUID, PendingChoice> pendingChoice = new HashMap<>();
+
+    /** 两级确认的有效窗口（毫秒）。可由 config 的 {@code gui.choice_confirm_ms} 覆盖。 */
+    private long choiceConfirmWindowMs() {
+        return Math.max(500L, plugin.getConfig().getLong("gui.choice_confirm_ms", 3000L));
+    }
+
+    /** 一次"待确认"的抉择记录。 */
+    private static final class PendingChoice {
+        final String questId;
+        final String stageId;
+        final int index;
+        final long at;
+        /** 判定超时用的窗口，创建时从配置固化下来。 */
+        final long windowMs;
+
+        PendingChoice(String questId, String stageId, int index, long windowMs) {
+            this.questId = questId;
+            this.stageId = stageId;
+            this.index = index;
+            this.at = System.currentTimeMillis();
+            this.windowMs = windowMs;
+        }
+
+        boolean expired() {
+            return System.currentTimeMillis() - at > windowMs;
+        }
+
+        /** 是否为同一次待确认（同一个任务 + 同一个阶段 + 同一个选项）。 */
+        boolean matches(Quest quest, QuestStage stage, int idx) {
+            return !expired()
+                    && quest.getFullId().equals(questId)
+                    && stage.getId().equals(stageId)
+                    && index == idx;
+        }
+    }
+
     public GuiManager(KeranQuests plugin) {
         this.plugin = plugin;
     }
@@ -563,6 +609,18 @@ public class GuiManager implements Listener {
         }
         infoLore.add("&7阶段：&f" + Math.min(stageIdx + 1, quest.getStageCount())
                 + "&7/&f" + quest.getStageCount());
+
+        // ---- 任务简介（可选） ----
+        // 放在状态信息之后、奖励之前：玩家先看"我现在该干什么"，
+        // 再看这段氛围文字，最后看奖励。多行用换行符分隔，逐行渲染。
+        if (quest.getDescription() != null && !quest.getDescription().isBlank()) {
+            infoLore.add("");
+            infoLore.add("&8──────────────");
+            for (String line : quest.getDescription().split("\n")) {
+                infoLore.add(com.keran.quests.util.Text.color(line));
+            }
+        }
+
         infoLore.add("");
         infoLore.add("&7奖励：");
         if (quest.getMoney() > 0) infoLore.add("&8 · &f金钱 &a" + (int) quest.getMoney());
@@ -774,6 +832,16 @@ public class GuiManager implements Listener {
             lore.add("&7需满足其中 &f" + stage.getNeed() + " &7条");
         }
 
+        // ---- 阶段简介（可选） ----
+        // 放在要求列表下方：先让玩家看清"要做什么"，再给一段叙事文字收尾。
+        if (stage.getDescription() != null && !stage.getDescription().isBlank()) {
+            lore.add("");
+            lore.add("&8──────────────");
+            for (String line : stage.getDescription().split("\n")) {
+                lore.add(com.keran.quests.util.Text.color(line));
+            }
+        }
+
         return new GuiItem(plugin, iconId, fallback)
                 .name("&f阶段 " + (stageIndex + 1) + " &7· &f" + com.keran.quests.util.Text.strip(stage.getName()))
                 .lore(lore)
@@ -846,11 +914,12 @@ public class GuiManager implements Listener {
             }
             lore.add("&c[!] 选择后不可更改");
             lore.add("");
-            if (plugin.getConfig().getBoolean("gui.choice_require_shift", true)) {
-                lore.add("&e按住 Shift 点击以确认");
-            } else {
-                lore.add("&e点击以确认");
-            }
+            // 两级确认：第一下点击只是"选中"，需要在 3 秒内再点一下才真正生效。
+            // 这样既防误触，又不依赖 Shift（手机端根本没有 Shift 键）。
+            lore.add(pendingChoice.get(player.getUniqueId()) != null
+                    && pendingChoice.get(player.getUniqueId()).matches(quest, stage, i)
+                    ? "&a[▶] 再次点击以确认"
+                    : "&e点击选择");
 
             inv.setItem(slots[i], new GuiItem(plugin, c.getIcon(), Material.PAPER)
                     .name("&f" + c.getLabel())
@@ -864,7 +933,8 @@ public class GuiManager implements Listener {
         int closeSlot = (rows - 1) * 9 + 4;
         inv.setItem(closeSlot, new GuiItem(plugin, cfg("gui.icons.close", "quest_ui_close"), Material.BARRIER)
                 .name("&7稍后再决定")
-                .lore("&7（可以关闭界面，之后重新打开）")
+                .lore("&7关掉后可从任务详情页的")
+                .lore("&7「继续抉择」按钮重新打开")
                 .action("close", "")
                 .build());
 
@@ -896,14 +966,6 @@ public class GuiManager implements Listener {
         String[] parts = raw.split("\\|", 2);
         String action = parts[0];
         String data = parts.length > 1 ? parts[1] : "";
-
-        // 抉择需要 Shift
-        if ("choice".equals(action)
-                && plugin.getConfig().getBoolean("gui.choice_require_shift", true)
-                && !player.isSneaking()) {
-            com.keran.quests.util.Text.send(player, "&c请按住 Shift 再点击以确认选择。");
-            return;
-        }
 
         switch (action) {
             case "open_tree" -> openQuestList(player, data, 0);
@@ -1006,7 +1068,30 @@ public class GuiManager implements Listener {
             }
         }
         if (stage == null) return;
+        final QuestStage stageRef = stage;   // lambda 里要用，得是 effectively final
         int idx = parseInt(parts[2], -1);
+        if (idx < 0) return;
+
+        // ---- 两级确认：第一下点击只是选中，再点一下才生效 ----
+        PendingChoice pc = pendingChoice.get(player.getUniqueId());
+        if (pc == null || !pc.matches(quest, stage, idx)) {
+            // 第一次点击（或点了别的选项 / 上次已超时）→ 记下待确认项并重绘界面
+            long window = choiceConfirmWindowMs();
+            pendingChoice.put(player.getUniqueId(), new PendingChoice(
+                    quest.getFullId(), stage.getId(), idx, window));
+            // 重绘当前的抉择界面，让该选项的 lore 变成「再次点击以确认」
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline()) openChoice(player, quest, stageRef);
+            });
+            com.keran.quests.util.Text.send(player, "&e已选中 &f"
+                    + com.keran.quests.util.Text.strip(stage.getChoices().get(idx).getLabel())
+                    + " &e，请在 &f" + (window / 1000)
+                    + " &e秒内再点一次以确认。");
+            return;
+        }
+
+        // 第二次点击同一个选项 → 真正生效
+        pendingChoice.remove(player.getUniqueId());
         String err = plugin.getChoiceManager().choose(player, quest, stage, idx);
         if (err != null) com.keran.quests.util.Text.send(player, err);
         player.closeInventory();
@@ -1039,6 +1124,8 @@ public class GuiManager implements Listener {
         currentView.remove(id);
         pageState.remove(id);
         suppressClose.remove(id);
+        // 关掉界面就等于放弃这次待确认，避免下次打开时选项还是"确认态"
+        pendingChoice.remove(id);
     }
 
     /**
@@ -1070,6 +1157,7 @@ public class GuiManager implements Listener {
         currentView.remove(id);
         pageState.remove(id);
         suppressClose.remove(id);
+        pendingChoice.remove(id);
     }
 
     // ==================================================================

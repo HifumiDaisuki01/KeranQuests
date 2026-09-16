@@ -36,6 +36,17 @@ public class QuestProgress {
      */
     private final java.util.Set<Integer> handledStages = new java.util.LinkedHashSet<>();
 
+    /**
+     * 已经弹过抉择界面的阶段序号集合。
+     *
+     * <p>为什么不能复用 {@link #handledStages}：{@code handled} 表达的是
+     * 「阶段的完成处理（播报 / 命令 / 记账）已执行」，而抉择阶段在**弹界面之前**
+     * 就已经被打上 handled 了（因为它的完成处理确实执行了）。但抉择还需要知道
+     * 「界面弹没弹过」—— 关掉后不该自动重弹，否则每隔几秒打扰玩家一次。
+     * 两件事语义不同，必须分开记。
+     */
+    private final java.util.Set<Integer> choiceGuiShownStages = new java.util.LinkedHashSet<>();
+
     public QuestProgress(String fullId) {
         this.fullId = fullId;
     }
@@ -68,12 +79,14 @@ public class QuestProgress {
         requirementProgress.keySet().removeIf(k -> k >= fromStage);
         completedStages.removeIf(k -> k >= fromStage);
         handledStages.removeIf(k -> k >= fromStage);
+        choiceGuiShownStages.removeIf(k -> k >= fromStage);
     }
 
     public void clearAllProgress() {
         requirementProgress.clear();
         completedStages.clear();
         handledStages.clear();
+        choiceGuiShownStages.clear();
         triggerCounts.clear();
         stageIndex = 0;
     }
@@ -131,10 +144,27 @@ public class QuestProgress {
      */
     public void unmarkStageHandled(int stage) {
         handledStages.remove(stage);
+        choiceGuiShownStages.remove(stage);
     }
 
     public java.util.Set<Integer> getHandledStages() {
         return handledStages;
+    }
+
+    // ---------------- 抉择界面弹出记录 ----------------
+
+    /** 该阶段的抉择界面是否已经弹过一次。 */
+    public boolean isChoiceGuiShown(int stage) {
+        return choiceGuiShownStages.contains(stage);
+    }
+
+    /** 记下"该阶段的抉择界面弹过了"，避免关掉后自动重弹打扰玩家。 */
+    public void markChoiceGuiShown(int stage) {
+        choiceGuiShownStages.add(stage);
+    }
+
+    public java.util.Set<Integer> getChoiceGuiShownStages() {
+        return choiceGuiShownStages;
     }
 
     // ---------------- 基本字段 ----------------
