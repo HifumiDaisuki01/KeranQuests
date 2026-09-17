@@ -55,7 +55,7 @@ public final class DialogText {
      * 构建一行「可点击按钮组」。
      *
      * @param buttons     按钮定义（label / command / hover / 是否可用）
-     * @param disabledTip 不可用时显示的悬停提示
+     * @param disabledTip 不可用时显示的悬停提示；为空则回落到按钮自身的 hover
      */
     public static Component buttonRow(java.util.List<Btn> buttons, String disabledTip) {
         Component row = Component.empty();
@@ -66,11 +66,18 @@ public final class DialogText {
             if (b.enabled) {
                 row = row.append(button(b.label, b.command, b.hover));
             } else {
-                // 灰掉：不可点击，悬停说明原因
+                // 灰掉：不可点击，悬停说明原因。
+                //
+                // 提示文案优先取参数 disabledTip（整行通用提示），为空则回落到
+                // 该按钮自身的 hover —— 后者才是「这一项为什么不可用」的精确原因。
+                // 例如物品不足时 DialogueRunner 会把「需要「xxx」×1（你有 0）」
+                // 写进 Btn.hover；早先这里只认 disabledTip，而调用方无一传参，
+                // 导致提示被整段丢弃、玩家看到灰按钮却不知差什么。
                 Component d = legacy(b.label).color(NamedTextColor.DARK_GRAY);
-                if (disabledTip != null && !disabledTip.isBlank()) {
+                String tip = (b.hover != null && !b.hover.isBlank()) ? b.hover : disabledTip;
+                if (tip != null && !tip.isBlank()) {
                     d = d.hoverEvent(HoverEvent.showText(
-                            legacy("&8" + disabledTip.replace("\\n", "\n"))));
+                            legacy("&8" + tip.replace("\\n", "\n"))));
                 }
                 row = row.append(d);
             }

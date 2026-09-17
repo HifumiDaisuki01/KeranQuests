@@ -55,6 +55,23 @@ public class PlayerLifecycleListener implements Listener {
         plugin.getFreezeManager().unfreeze(p.getUniqueId());
         // 清理 GUI 状态，避免 currentView / pageState / suppressClose 随上下线堆积
         plugin.getGuiManager().forget(p.getUniqueId());
+
+        // ★ 打断该玩家的对话会话。
+        //
+        // 对话状态（talking / sessions / runningTasks）全部活在内存里，不随玩家
+        // 下线自动清理。若不在这里打断：
+        //   ① talking 残留该 UUID → 重连后右键 NPC，startDialogue() 开头
+        //      的 if (talking.contains(uid)) return true; 会把这次交互直接吞掉，
+        //      玩家对【所有】配了对话的 NPC 永久失聪，且毫无提示；
+        //   ② sessions 一并残留 → schedule() 的守卫条件
+        //      if (player.isOnline() && sessions.containsKey(s.uid)) 在重连后
+        //      依然成立，于是掉线前已排期的台词会"复活"，出现"右键没反应，
+        //      但聊天栏自己往下演"的诡异场面。
+        // 直到插件重载或服务器重启才会恢复。
+        //
+        // 传 false：玩家已经下线，不必再发"对话已中断"。
+        plugin.getDialogueRunner().interrupt(p, false);
+
         plugin.getPlayerDataStore().unload(p.getUniqueId());
     }
 
