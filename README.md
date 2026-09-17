@@ -174,6 +174,8 @@ identifier = `kq`，主要占位符：
 |---|---|
 | `%kq_current%` | 当前任务名 |
 | `%kq_current_stage%` | 当前阶段名 |
+| `%kq_current_tree%` | 当前任务所属的任务树名 |
+| `%kq_current_stage_index%` / `%kq_current_stage_total%` | 阶段序号 / 总阶段数 |
 | `%kq_current_req_1_progress%` | 第 1 条要求进度（`3/10`） |
 | `%kq_current_time_left%` | 限时任务剩余时间 |
 | `%kq_active_main%` / `%kq_active_side%` | 进行中主线/支线数 |
@@ -182,7 +184,7 @@ identifier = `kq`，主要占位符：
 | `%kq_cooldown_<树ID>:<任务ID>%` | 循环任务剩余冷却 |
 | `%kq_can_accept_<树ID>:<任务ID>%` | 是否可接取 |
 
-完整清单见文档。
+完整清单见 `KqExpansion` 类的类注释。
 
 ## 第三方联动示例
 
