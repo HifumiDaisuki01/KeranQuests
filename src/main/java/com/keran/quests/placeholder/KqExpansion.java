@@ -28,6 +28,8 @@ import java.util.List;
  *   <tr><td>{@code %kq_current_id%}</td><td>当前任务 ID</td></tr>
  *   <tr><td>{@code %kq_current_type%}</td><td>主线 / 支线</td></tr>
  *   <tr><td>{@code %kq_current_stage%}</td><td>当前阶段名</td></tr>
+ *   <tr><td>{@code %kq_current_tree%}</td><td>当前任务所属的任务树名</td></tr>
+ *   <tr><td>{@code %kq_current_tree_id%}</td><td>当前任务所属的任务树 ID</td></tr>
  *   <tr><td>{@code %kq_current_stage_index%}</td><td>当前阶段序号（1 起）</td></tr>
  *   <tr><td>{@code %kq_current_stage_total%}</td><td>总阶段数</td></tr>
  *   <tr><td>{@code %kq_current_req_1%}</td><td>第 1 条要求的描述</td></tr>
@@ -127,6 +129,16 @@ public class KqExpansion extends PlaceholderExpansion {
                 return quest == null ? none : Text.strip(quest.getName());
             case "current_id":
                 return quest == null ? none : quest.getFullId();
+            case "current_tree":
+                // 当前任务所属的任务树名。没接任务时回落 none，
+                // 这样计分板上的树名行能随玩家是否有任务自然显隐。
+                if (quest == null) return none;
+                {
+                    QuestTree tree = plugin.getTreeLoader().getTree(quest.getTreeId());
+                    return tree == null ? none : Text.strip(tree.getName());
+                }
+            case "current_tree_id":
+                return quest == null ? none : quest.getTreeId();
             case "current_type":
                 if (quest == null) return none;
                 return quest.getType() == QuestType.MAIN ? "主线" : "支线";
