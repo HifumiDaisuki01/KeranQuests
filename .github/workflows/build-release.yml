@@ -8,7 +8,7 @@ permissions:
   contents: read
 jobs:
   editor:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,7 +29,7 @@ jobs:
           path: qa/
   build:
     needs: editor
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -65,3 +65,4 @@ jobs:
             exit 0
           fi
           gh release create v2.0.0 out/KeranQuests-2.0.0.jar out/KeranQuests-Client-1.20.1-2.0.0.jar out/KeranQuests-Editor-2.0.0.html out/KeranQuests-Editor-2.0.0.zip out/KeranQuests-2.0.0-bundle.zip out/SHA256SUMS.txt --target "$GITHUB_SHA" --title 'KeranQuests 2.0.0 · 自定义任务终端与剧情编辑器' --notes-file docs-v2/RELEASE.md
+
