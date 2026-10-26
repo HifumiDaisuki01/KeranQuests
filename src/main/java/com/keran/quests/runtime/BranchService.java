@@ -19,7 +19,7 @@ public final class BranchService {
         QuestProgress parent = source == null ? null : data.getProgress(source.getFullId());
         if (source != null && (parent == null || parent.getState() != QuestState.ACTIVE))
             return "&c原任务已不在进行中，请重新打开任务界面。";
-        String tree = target != null ? target.getTreeId() : source == null ? null : source.getTreeId();
+        String tree = source != null ? source.getTreeId() : target == null ? null : target.getTreeId();
         if (group != null && tree == null) return "&c抉择缺少所属任务树。";
         String stateKey = group == null ? null : tree + ":choice:" + group;
         String previous = stateKey == null ? null : data.getAllTreeState().get(stateKey);

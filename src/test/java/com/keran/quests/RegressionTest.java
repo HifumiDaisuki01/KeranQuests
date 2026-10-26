@@ -179,4 +179,15 @@ class RegressionTest {
         assertTrue(manager.isTreeCompleted(data, "test"));
     }
 
+    @Test void crossTreeChoiceBelongsToTheSourceStory() throws Exception {
+        tree("id: test\nquests:\n  a:\n    steps: [{trigger: a}]\n");
+        Files.writeString(dir.resolve("quests/other.yml"), "id: other\nquests:\n  b:\n    steps: [{trigger: b}]\n");
+        loader.load();
+        Quest source = loader.resolveQuest("test:a"), target = loader.resolveQuest("other:b");
+        active(source);
+        assertNull(plugin.getBranchService().select(player, target, source, "test_route", "A", null, 1, false));
+        assertEquals("A", data.getTreeState("test", "choice:test_route"));
+        assertNull(data.getTreeState("other", "choice:test_route"));
+    }
+
 }
