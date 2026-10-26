@@ -93,39 +93,49 @@ public class DialogueRunner {
     //  加载
     // ==================================================================
 
-    public void load() {
-        byNpc.clear();
+    public static final class Prepared {
+        private final Map<String, List<Dialogue>> entries;
+        private Prepared(Map<String, List<Dialogue>> entries) { this.entries = entries; }
+    }
+
+    public Prepared prepare(com.keran.quests.config.QuestTreeLoader.Prepared registry) {
         File dir = new File(plugin.getDataFolder(), "npc");
-        if (!dir.exists()) {
-            dir.mkdirs();
-            plugin.saveResource("npc/dialogue.yml", false);
-        }
-        File f = new File(dir, "dialogue.yml");
-        if (!f.exists()) return;
-
-        try {
-            YamlConfiguration yml = YamlConfiguration.loadConfiguration(f);
-            ConfigurationSection root = yml.getConfigurationSection("dialogues");
-            if (root == null) return;
-
-            int total = 0;
-            for (String key : root.getKeys(false)) {
-                ConfigurationSection sec = root.getConfigurationSection(key);
-                if (sec == null) continue;
-                Dialogue d = Dialogue.fromConfig(key, sec);
-                if (d == null) continue;
-                byNpc.computeIfAbsent(d.npc.toLowerCase(), k -> new ArrayList<>()).add(d);
-                total++;
+        if (!dir.exists()) { dir.mkdirs(); plugin.saveResource("npc/dialogue.yml", false); }
+        Map<String, List<Dialogue>> candidate = new LinkedHashMap<>();
+        Set<String> ids = new HashSet<>();
+        try (var paths = java.nio.file.Files.walk(dir.toPath())) {
+            for (var path : paths.filter(p -> p.toString().endsWith(".yml")).sorted().toList()) {
+                YamlConfiguration yml = new YamlConfiguration(); yml.load(path.toFile());
+                ConfigurationSection root = yml.getConfigurationSection("dialogues");
+                if (root == null) throw new IllegalArgumentException(path + " 缺少 dialogues");
+                for (String key : root.getKeys(false)) {
+                    if (!ids.add(key)) throw new IllegalArgumentException("对话 ID 重复：" + key);
+                    Dialogue d = Dialogue.fromConfig(key, root.getConfigurationSection(key));
+                    if (d == null) throw new IllegalArgumentException("无效对话：" + key);
+                    for (Node n : d.nodes) for (Option o : n.options) {
+                        for (String ref : java.util.Arrays.asList(o.quest, o.completeQuest)) {
+                            if (ref != null && !registry.quests().containsKey(ref))
+                                throw new IllegalArgumentException(key + " 引用了不存在的任务：" + ref);
+                        }
+                    }
+                    candidate.computeIfAbsent(d.npc.toLowerCase(java.util.Locale.ROOT), k -> new ArrayList<>()).add(d);
+                }
             }
-            // 每个 NPC 内部按 priority 降序（大的优先匹配）
-            for (List<Dialogue> list : byNpc.values()) {
-                list.sort((a, b) -> Integer.compare(b.priority, a.priority));
-            }
-            plugin.getLogger().info("已加载 " + total + " 条 NPC 对话（覆盖 "
-                    + byNpc.size() + " 个 NPC）。");
-        } catch (Throwable t) {
-            plugin.getLogger().warning("加载对话配置失败：" + t.getMessage());
-        }
+        } catch (Exception ex) { throw new IllegalArgumentException("对话配置：" + ex.getMessage(), ex); }
+        for (List<Dialogue> list : candidate.values()) list.sort((a, b) -> Integer.compare(b.priority, a.priority));
+        return new Prepared(candidate);
+    }
+    public void commit(Prepared prepared) {
+        shutdown();
+        byNpc.clear(); byNpc.putAll(prepared.entries);
+        plugin.getLogger().info("已加载 " + getDialogueCount() + " 条 NPC 对话。");
+    }
+    public void load() {
+        var registry = new com.keran.quests.config.QuestTreeLoader.Prepared(
+                plugin.getTreeLoader().getTrees().stream().collect(java.util.stream.Collectors.toMap(
+                        com.keran.quests.config.model.QuestTree::getId, x -> x)),
+                plugin.getTreeLoader().getAllQuests().stream().collect(java.util.stream.Collectors.toMap(Quest::getFullId, x -> x)));
+        commit(prepare(registry));
     }
 
     // ==================================================================
@@ -165,6 +175,15 @@ public class DialogueRunner {
         s.uid = uid;
         s.dialogue = chosen;
         s.nodeIndex = 0;
+        s.advanceTalk = chosen.nodes.stream().noneMatch(n -> n.type == NodeType.CHOOSE);
+        for (Quest quest : plugin.getQuestManager().getActiveQuests(player)) {
+            var progress = plugin.getPlayerData(player).getProgress(quest.getFullId());
+            if (progress.getStageIndex() >= quest.getStageCount()) continue;
+            var stage = quest.getStages().get(progress.getStageIndex());
+            if (stage.getRequirements().stream().anyMatch(req -> req.getType() == com.keran.quests.config.model.enums.RequirementType.NPC_TALK
+                    && s.dialogue.npc.equalsIgnoreCase(req.getNpcName())))
+                s.talkTargets.put(quest.getFullId(), progress.getExecutionId() + ":" + progress.getStageIndex());
+        }
         sessions.put(uid, s);
 
         if (chosen.freeze) {
@@ -212,8 +231,9 @@ public class DialogueRunner {
     private void doSay(Player player, Session s, Node n, int index) {
         schedule(player, s, n.delay, () -> {
             if (!player.isOnline()) return;
-            player.sendMessage(DialogText.line(
-                    Text.replace(n.text, "player", player.getName())));
+            String line = Text.replace(n.text, "player", player.getName());
+            if (!plugin.getClientBridge().dialogue(player, s.dialogue.id, s.token, index, line, List.of(), "say"))
+                player.sendMessage(DialogText.line(line));
             runCommands(player, n.run);
             schedule(player, s, Math.max(1, n.after),
                     () -> runFrom(player, s, index + 1));
@@ -229,16 +249,19 @@ public class DialogueRunner {
     private void doAsk(Player player, Session s, Node n, int index) {
         schedule(player, s, n.delay, () -> {
             if (!player.isOnline()) return;
-            if (n.prompt != null && !n.prompt.isBlank()) {
+            if (!plugin.getClientBridge().hasClient(player) && n.prompt != null && !n.prompt.isBlank()) {
                 player.sendMessage(DialogText.line(
                         Text.replace(n.prompt, "player", player.getName())));
             }
             List<DialogText.Btn> btns = new ArrayList<>();
+            List<Map<String, Object>> nativeButtons = new ArrayList<>();
             for (int i = 0; i < n.questions.size(); i++) {
                 Question q = n.questions.get(i);
                 // 条件不满足的问题直接不显示（用于"随进度解锁新问题"）
                 if (!q.condition.test(player)) continue;
                 String cmd = DialogText.CMD + " pick " + s.dialogue.id + " " + index + " " + i;
+                nativeButtons.add(com.keran.quests.client.ClientBridge.packet("button", "index", i,
+                        "label", q.label, "enabled", true, "tip", q.hover == null ? "" : q.hover));
                 btns.add(new DialogText.Btn(
                         q.exit ? ("&8[ " + q.label + " ]") : ("&e[ " + q.label + " ]"),
                         cmd, q.hover));
@@ -248,7 +271,8 @@ public class DialogueRunner {
                 runFrom(player, s, index + 1);
                 return;
             }
-            player.sendMessage(DialogText.buttonRow(btns, null));
+            if (!plugin.getClientBridge().dialogue(player, s.dialogue.id, s.token, index, n.prompt, nativeButtons, "ask"))
+                player.sendMessage(DialogText.buttonRow(btns, null));
         });
     }
 
@@ -260,11 +284,12 @@ public class DialogueRunner {
     private void doChoose(Player player, Session s, Node n, int index) {
         schedule(player, s, n.delay, () -> {
             if (!player.isOnline()) return;
-            if (n.prompt != null && !n.prompt.isBlank()) {
+            if (!plugin.getClientBridge().hasClient(player) && n.prompt != null && !n.prompt.isBlank()) {
                 player.sendMessage(DialogText.line(
                         Text.replace(n.prompt, "player", player.getName())));
             }
             List<DialogText.Btn> btns = new ArrayList<>();
+            List<Map<String, Object>> nativeButtons = new ArrayList<>();
             for (int i = 0; i < n.options.size(); i++) {
                 Option o = n.options.get(i);
                 if (!o.condition.test(player)) continue;
@@ -279,13 +304,16 @@ public class DialogueRunner {
                     }
                 }
                 String cmd = DialogText.CMD + " choose " + s.dialogue.id + " " + index + " " + i;
+                nativeButtons.add(com.keran.quests.client.ClientBridge.packet("button", "index", i,
+                        "label", o.label, "enabled", enough, "tip", tip == null ? "" : tip));
                 btns.add(new DialogText.Btn("&c[ " + o.label + " ]", cmd, tip, enough));
             }
             if (btns.isEmpty()) {
                 runFrom(player, s, index + 1);
                 return;
             }
-            player.sendMessage(DialogText.buttonRow(btns, null));
+            if (!plugin.getClientBridge().dialogue(player, s.dialogue.id, s.token, index, n.prompt, nativeButtons, "choose"))
+                player.sendMessage(DialogText.buttonRow(btns, null));
         });
     }
 
@@ -332,8 +360,9 @@ public class DialogueRunner {
         }
 
         if (q.answer != null && !q.answer.isBlank()) {
-            player.sendMessage(DialogText.line(
-                    Text.replace(q.answer, "player", player.getName())));
+            String answer = Text.replace(q.answer, "player", player.getName());
+            if (!plugin.getClientBridge().dialogue(player, s.dialogue.id, s.token, nodeIndex, answer, List.of(), "say"))
+                player.sendMessage(DialogText.line(answer));
         }
         runCommands(player, q.run);
 
@@ -385,59 +414,25 @@ public class DialogueRunner {
             return "&c这个选项当前不可用。";
         }
 
-        // ---- 物品门槛复核 + 扣除（带回滚） ----
-        //
-        // 【必须拆成两步】门槛校验（require_item 非空就一定要查）与
-        // 是否扣除（consume）是两件独立的事。
-        // 早期实现把它俩写成一个条件 `itemId != null && o.consume`，
-        // 导致「配了 require_item 但 consume: false」的选项门槛被完全跳过，
-        // 玩家没物品也能点 —— 这是实测中真实抓到的缺陷。
-        boolean consumed = false;
-        String itemId = o.requireItem;
-        int itemCount = Math.max(1, o.requireCount);
-        if (itemId != null) {
-            int have = plugin.getOraxenHook().countItem(player, itemId);
-            if (have < itemCount) {
-                s.answered = false;
-                return "&c你没有「" + itemId + "」×" + itemCount + "（当前 " + have + "），无法选择。";
-            }
-            if (o.consume) {
-                plugin.getOraxenHook().removeItem(player, itemId, itemCount);
-                consumed = true;
-            }
+        Quest target = o.quest == null ? null : plugin.getTreeLoader().resolveQuest(o.quest);
+        Quest source = o.completeQuest == null ? null : plugin.getTreeLoader().resolveQuest(o.completeQuest);
+        if ((o.quest != null && target == null) || (o.completeQuest != null && source == null)) {
+            s.answered = false;
+            return "&c对话引用的任务已失效，请重新开始。";
         }
-
-        // ---- 记录抉择（树级状态，持久化） ----
-        if (o.quest != null && !o.quest.isBlank()) {
-            Quest target = plugin.getTreeLoader().resolveQuest(o.quest);
-            if (target == null) {
-                rollback(player, itemId, itemCount, consumed);
-                s.answered = false;
-                return "&c配置错误：目标任务 " + o.quest + " 不存在。";
-            }
-            PlayerData data = plugin.getPlayerData(player);
-            if (o.choiceGroup != null && !o.choiceGroup.isBlank()) {
-                data.setTreeState(target.getTreeId(), "choice:" + o.choiceGroup,
-                        o.value == null ? valueOf(oIndex) : o.value);
-                data.markDirty();
-                plugin.getPlayerDataStore().save(data);
-            }
-            String err = plugin.getQuestManager().accept(player, target);
-            if (err != null) {
-                rollback(player, itemId, itemCount, consumed);
-                s.answered = false;
-                return "&e分支任务接取失败：" + err;
-            }
-            Text.send(player, plugin.getConfig().getString("messages.prefix", "")
-                    + "&a你选择了：&f" + o.label);
-        }
+        String err = plugin.getBranchService().select(player, target, source, o.choiceGroup,
+                o.value == null ? valueOf(oIndex) : o.value, o.requireItem, Math.max(1, o.requireCount), o.consume);
+        if (err != null) { s.answered = false; return err; }
+        s.advanceTalk = o.advanceTalk;
 
         // ---- 播后续台词，推进下一节点 ----
         if (o.reply != null && !o.reply.isBlank()) {
-            player.sendMessage(DialogText.line(
-                    Text.replace(o.reply, "player", player.getName())));
+            String reply = Text.replace(o.reply, "player", player.getName());
+            if (!plugin.getClientBridge().dialogue(player, s.dialogue.id, s.token, nodeIndex, reply, List.of(), "say"))
+                player.sendMessage(DialogText.line(reply));
         }
         runCommands(player, o.run);
+        if (o.end) { endSession(s); return null; }
         final int cur = s.nodeIndex;     // 捕获，避免延迟执行时读到已变的值
         schedule(player, s, Math.max(1, o.after),
                 () -> runFrom(player, s, cur + 1));
@@ -484,7 +479,8 @@ public class DialogueRunner {
             dispatch(Text.replace(raw, "player", player.getName()));
         }
         // 推进 NPC_TALK 检定（与 v1 行为一致）
-        plugin.getQuestManager().fireNpcTalk(player, s.dialogue.npc);
+        if (s.advanceTalk) plugin.getQuestManager().fireNpcTalk(player, s.dialogue.npc, s.talkTargets);
+        if (plugin.getClientBridge() != null) plugin.getClientBridge().endDialogue(player);
     }
 
     /** 中途结束（下线 / 异常），不跑 after、不推进任务。 */
@@ -494,6 +490,8 @@ public class DialogueRunner {
         sessions.remove(uid);
         cancelTasks(uid);
         plugin.getFreezeManager().unfreeze(uid);
+        Player player = Bukkit.getPlayer(uid);
+        if (player != null && plugin.getClientBridge() != null) plugin.getClientBridge().endDialogue(player);
     }
 
     /** 玩家是否正在对话。 */
@@ -573,7 +571,7 @@ public class DialogueRunner {
         }
         BukkitTask t = Bukkit.getScheduler().runTaskLater(plugin, () -> {
             // 会话已结束（玩家下线 / 对话被打断）时不再继续，避免幽灵台词
-            if (player.isOnline() && sessions.containsKey(s.uid)) r.run();
+            if (player.isOnline() && sessions.get(s.uid) == s) r.run();
         }, delayTicks);
         runningTasks.computeIfAbsent(s.uid, k -> new ArrayList<>()).add(t);
     }
@@ -670,7 +668,14 @@ public class DialogueRunner {
     private enum NodeType {SAY, ASK, CHOOSE}
 
     /** 一次对话会话。 */
+    public String sessionToken(Player player) {
+        Session s = sessions.get(player.getUniqueId()); return s == null ? null : s.token;
+    }
+
     private static class Session {
+        final String token = UUID.randomUUID().toString();
+        final Map<String, String> talkTargets = new HashMap<>();
+        boolean advanceTalk;
         UUID uid;
         Dialogue dialogue;
         int nodeIndex;
@@ -746,6 +751,19 @@ public class DialogueRunner {
                 }
             }
             if (d.nodes.isEmpty() && d.after.isEmpty()) return null;
+            for (Node node : d.nodes) {
+                java.util.Iterator<String> it = node.run.iterator();
+                while (it.hasNext()) {
+                    String command = it.next();
+                    if (!command.startsWith("kquests progress {player} ")) continue;
+                    String source = command.substring("kquests progress {player} ".length()).trim();
+                    List<Option> targets = d.nodes.stream().flatMap(n -> n.options.stream()).filter(o -> o.quest != null).toList();
+                    if (!targets.isEmpty()) {
+                        for (Option o : targets) if (o.completeQuest == null) o.completeQuest = source;
+                        it.remove();
+                    }
+                }
+            }
             return d;
         }
     }
@@ -822,6 +840,9 @@ public class DialogueRunner {
                         op.requireItem = os2.getString("require_item", null);
                         op.requireCount = os2.getInt("require_count", 1);
                         op.consume = os2.getBoolean("consume", false);
+                        op.end = os2.getBoolean("end", false);
+                        op.completeQuest = os2.getString("complete_quest", null);
+                        op.advanceTalk = os2.getBoolean("advance_talk", op.consume && op.quest == null);
                         op.condition = DialogCondition.fromConfig(
                                 os2.getConfigurationSection("when"));
                         if (!op.label.isBlank()) n.options.add(op);
@@ -857,6 +878,9 @@ public class DialogueRunner {
         String requireItem;
         int requireCount = 1;
         boolean consume;
+        boolean end;
+        boolean advanceTalk;
+        String completeQuest;
         DialogCondition condition = DialogCondition.fromConfig(null);
     }
 

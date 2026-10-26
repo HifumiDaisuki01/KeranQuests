@@ -208,13 +208,7 @@ public class KqCommand implements CommandExecutor, TabCompleter {
         }
     }
 
-    /**
-     * 重新打开某任务的抉择界面，成功返回 true。
-     *
-     * <p>清 handled 标记是关键：{@code checkStageCompletion} 开头的防重复守卫
-     * {@code if (p.isStageHandled(stageIdx)) return false;} 会永久拦截已完成处理的阶段，
-     * 不清掉的话界面弹不出来。completed 标记不动 —— 那是真实进度。
-     */
+    /** 重新显示当前抉择，不撤销已经持久化的阶段结算标记。 */
     private boolean reopenChoice(Player player, Quest quest) {
         PlayerData data = plugin.getPlayerData(player);
         QuestProgress p = data.getProgress(quest.getFullId());
@@ -224,7 +218,7 @@ public class KqCommand implements CommandExecutor, TabCompleter {
         QuestStage stage = quest.getStages().get(idx);
         if (!stage.isChoice() || stage.getChoices().isEmpty()) return false;
 
-        p.unmarkStageHandled(idx);
+        // 重开界面不撤销阶段结算记录。
         data.markDirty();
         plugin.getPlayerDataStore().save(data);
         plugin.getChoiceManager().openChoice(player, quest, stage);
@@ -233,8 +227,7 @@ public class KqCommand implements CommandExecutor, TabCompleter {
 
     private void doReload(CommandSender sender) {
         if (!checkAdmin(sender)) return;
-        plugin.reloadAll();
-        Text.send(sender, "&a配置已重载。");
+        Text.send(sender, plugin.reloadAll() ? "&a配置已校验并重载。" : "&c重载失败，旧配置继续运行，详见控制台。");
     }
 
     // ------------------------------------------------------------------

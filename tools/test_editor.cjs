@@ -1,0 +1,20 @@
+const {chromium}=require('playwright');const assert=require('node:assert/strict');const path=require('node:path');const fs=require('node:fs/promises');
+(async()=>{
+ const launch={headless:true,args:['--no-sandbox','--disable-dev-shm-usage']};if(process.env.KQ_CHROME)launch.executablePath=process.env.KQ_CHROME;
+ const browser=await chromium.launch(launch);const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('file://'+path.resolve(__dirname,'../out/KeranQuests-Editor-2.0.0.html'));
+ await page.locator('.node').first().waitFor();assert.equal(await page.locator('.node').count(),2);
+ await page.getByRole('button',{name:'＋ 添加任务',exact:true}).click();assert.equal(await page.locator('.node').count(),3);
+ await page.getByLabel('任务标题',{exact:true}).fill('测试分支');await page.getByLabel('任务标题',{exact:true}).press('Tab');
+ await page.getByLabel('前置任务（逗号分隔，支持 tree:quest）').fill('arrival');await page.getByLabel('前置任务（逗号分隔，支持 tree:quest）').press('Tab');
+ await page.getByRole('button',{name:'校验配置',exact:true}).click();assert.ok((await page.locator('#status').textContent()).includes('0 个错误'));
+ await page.locator('#issues').evaluate(n=>n.classList.add('hidden'));
+ const downloadPromise=page.waitForEvent('download');await page.getByRole('button',{name:'导出任务树',exact:true}).click();const download=await downloadPromise;const file=await download.path();const exported=await fs.readFile(file,'utf8');assert.ok(exported.includes('测试分支'));assert.ok(exported.includes('steps:'));
+ await page.locator('#issues').evaluate(n=>n.classList.add('hidden'));
+ await page.locator('#file').setInputFiles(path.resolve(__dirname,'../src/main/resources/quests/zhulong.yml'));await page.waitForFunction(()=>document.querySelectorAll('.node').length===9);
+ await fs.mkdir(path.resolve(__dirname,'../qa'),{recursive:true});await page.screenshot({path:path.resolve(__dirname,'../qa/editor-desktop.png'),fullPage:true});
+ await page.getByRole('button',{name:'NPC 对话',exact:true}).click();await page.getByRole('button',{name:'＋ 新建对话',exact:true}).click();await page.getByRole('button',{name:'＋ 抉择',exact:true}).click();assert.equal(await page.locator('.dialog-card').count(),3);
+ await page.setViewportSize({width:760,height:1000});await page.getByRole('button',{name:'任务关系图',exact:true}).click();await page.screenshot({path:path.resolve(__dirname,'../qa/editor-compact.png'),fullPage:true});
+ await page.reload();await page.locator('.node').first().waitFor();assert.equal(await page.locator('.node').count(),9);
+ assert.deepEqual(errors,[]);console.log('Editor browser checks passed: standalone load, create/edit, validate, export, legacy import, dialogue authoring, responsive layout and draft restore.');await browser.close();
+})().catch(e=>{console.error(e);process.exit(1);});

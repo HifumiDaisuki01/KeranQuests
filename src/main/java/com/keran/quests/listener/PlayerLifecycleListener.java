@@ -72,6 +72,8 @@ public class PlayerLifecycleListener implements Listener {
         // 传 false：玩家已经下线，不必再发"对话已中断"。
         plugin.getDialogueRunner().interrupt(p, false);
 
+        plugin.getRegionRunner().forget(p.getUniqueId());
+        plugin.getClientBridge().forget(p.getUniqueId());
         plugin.getPlayerDataStore().unload(p.getUniqueId());
     }
 

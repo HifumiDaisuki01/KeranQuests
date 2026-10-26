@@ -81,9 +81,8 @@ public class RegionRunner {
 
     private void tick() {
         long now = System.currentTimeMillis();
-        // 注意：不再每 tick 清空区域缓存。
-        // 缓存失效改为「玩家水平位移超过 region.cache_radius」时触发（见 inRegion），
-        // 这样站着不动时不会每秒重复查询 WorldGuard，而走动超过阈值后立刻重查。
+        regionCache.clear(); // 每轮同一玩家/区域只查询一次，绝不跨轮沿用边界结果
+        java.util.Set<String> activeStayKeys = new java.util.HashSet<>();
         for (Player player : Bukkit.getOnlinePlayers()) {
             PlayerData data = plugin.getPlayerData(player);
             if (data == null) continue;
@@ -95,16 +94,18 @@ public class RegionRunner {
                 anyActive = true;
                 Quest quest = plugin.getTreeLoader().resolveQuest(e.getKey());
                 if (quest == null) continue;
-                tickQuest(player, data, quest, p, now);
+                tickQuest(player, data, quest, p, now, activeStayKeys);
             }
             if (!anyActive) {
                 regionCache.remove(player.getUniqueId());
                 lastQueryLoc.remove(player.getUniqueId());
             }
         }
+        stayEnterAt.keySet().retainAll(activeStayKeys);
+        lastStayNotice.keySet().retainAll(activeStayKeys);
     }
 
-    private void tickQuest(Player player, PlayerData data, Quest quest, QuestProgress p, long now) {
+    private void tickQuest(Player player, PlayerData data, Quest quest, QuestProgress p, long now, java.util.Set<String> activeStayKeys) {
         // ---- 超时判定 ----
         if (quest.getTimeLimit() > 0 && p.getStartedAt() > 0) {
             long elapsed = (now - p.getStartedAt()) / 1000;
@@ -134,7 +135,8 @@ public class RegionRunner {
 
             if (req.getType() == RequirementType.REGION_STAY) {
                 int cur = p.getRequirementProgress(si, ri);
-                String stayKey = stayKey(player, si, ri);
+                String stayKey = stayKey(player, quest, p, si, ri);
+                activeStayKeys.add(stayKey);
                 if (inside) {
                     // 按「墙上时钟」推进，而不是每次检测固定加一个配置值。
                     // runTaskTimer 只保证「至少间隔」，卡顿时单次调度会被推迟很远，
@@ -192,56 +194,36 @@ public class RegionRunner {
         plugin.getQuestManager().checkStageCompletion(player, quest, p, false);
     }
 
-    /** 停留类要求的状态键：玩家 + 阶段 + 要求序号。 */
-    private String stayKey(Player player, int stageIdx, int reqIdx) {
-        return player.getUniqueId() + ":" + stageIdx + ":" + reqIdx;
+    private String stayKey(Player player, Quest quest, QuestProgress progress, int stageIdx, int reqIdx) {
+        return player.getUniqueId() + ":" + quest.getFullId() + ":" + progress.getExecutionId() + ":" + stageIdx + ":" + reqIdx;
     }
 
-    /** 判断玩家是否在某区域（带缓存，每秒刷新）。 */
     private boolean inRegion(Player player, String region, String world) {
         if (region == null || region.isBlank()) return false;
-        if (world != null && player.getWorld() != null
-                && !player.getWorld().getName().equalsIgnoreCase(world)) {
-            return false;
+        if (world != null && !player.getWorld().getName().equalsIgnoreCase(world)) return false;
+        Map<String, Boolean> cache = regionCache.computeIfAbsent(player.getUniqueId(), k -> new HashMap<>());
+        String key = player.getWorld().getUID() + ":" + region;
+        return cache.computeIfAbsent(key, k -> plugin.getWorldGuardHook().isInRegion(player, region));
+    }
+
+    public void forget(UUID uid) {
+        PlayerData data = plugin.getPlayerDataStore().get(uid);
+        if (data != null) for (var entry : data.getAllProgress().entrySet()) {
+            Quest quest = plugin.getTreeLoader().resolveQuest(entry.getKey());
+            QuestProgress progress = entry.getValue();
+            if (quest == null || progress.getState() != com.keran.quests.config.model.enums.QuestState.ACTIVE
+                    || progress.getStageIndex() >= quest.getStageCount()) continue;
+            var requirements = quest.getStages().get(progress.getStageIndex()).getRequirements();
+            for (int i = 0; i < requirements.size(); i++) if (requirements.get(i).getType() == RequirementType.REGION_STAY) {
+                progress.setRequirementProgress(progress.getStageIndex(), i, 0); data.markDirty();
+            }
         }
-        UUID uid = player.getUniqueId();
-        Map<String, Boolean> cache = regionCache.computeIfAbsent(uid, k -> new HashMap<>());
-        String key = player.getWorld().getName() + ":" + region;
-
-        Boolean cached = cache.get(key);
-        if (cached != null) {
-            // 缓存未过期（玩家移动距离未超过 cache_radius）→ 直接复用
-            if (!cacheExpired(player, uid)) return cached;
-            // 过期则重查，避免走出去很远还拿旧结果
-            cache.remove(key);
-        }
-
-        boolean r = plugin.getWorldGuardHook().isInRegion(player, region);
-        cache.put(key, r);
-        rememberLoc(player, uid);
-        return r;
+        regionCache.remove(uid);
+        lastQueryLoc.remove(uid);
+        String prefix = uid + ":";
+        stayEnterAt.keySet().removeIf(k -> k.startsWith(prefix));
+        lastStayNotice.keySet().removeIf(k -> k.startsWith(prefix));
     }
 
-    /** 玩家自上次区域查询以来移动距离是否已超过 cache_radius 配置。 */
-    private boolean cacheExpired(Player player, UUID uid) {
-        double radius = plugin.getConfig().getDouble("region.cache_radius", 8.0D);
-        if (radius <= 0) return true;   // 配置为 0 = 不使用坐标缓存
-        org.bukkit.Location last = lastQueryLoc.get(uid);
-        if (last == null) return true;
-        if (last.getWorld() == null || player.getWorld() == null) return true;
-        if (!last.getWorld().getName().equals(player.getWorld().getName())) return true;
-        // 只比较 X/Z 的水平位移，垂直方向（上楼下楼）不影响区域判定
-        double dx = last.getX() - player.getLocation().getX();
-        double dz = last.getZ() - player.getLocation().getZ();
-        return (dx * dx + dz * dz) > radius * radius;
-    }
-
-    private void rememberLoc(Player player, UUID uid) {
-        lastQueryLoc.put(uid, player.getLocation().clone());
-    }
-
-    /** 每个 tick 周期清空区域缓存（在 tick 开头调用会更准确，这里用简单策略）。 */
-    public void clearCache() {
-        regionCache.clear();
-    }
+    public void clearCache() { regionCache.clear(); }
 }

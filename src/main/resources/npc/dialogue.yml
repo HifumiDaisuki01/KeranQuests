@@ -1,425 +1,249 @@
-# =============================================================================
-#  NPC 对话配置 · v2（节点式 + 聊天栏点击交互）
-# =============================================================================
-#  改完执行 /kq reload 生效。
-#  文件位置：plugins/KeranQuests/npc/dialogue.yml
-#
-#  ┌─ v2 能做什么 ─────────────────────────────────────────────────────────┐
-#  │  · 一个 NPC 可以配【多条】对话，按 priority 选第一条条件满足的         │
-#  │  · 对话由【节点】串成：say（说话）/ ask（可点提问）/ choose（抉择）    │
-#  │  · 玩家在聊天栏里【点击文字】就能互动，不需要开任何 GUI 窗口           │
-#  │  · ask 节点是循环：点一个问题答一个，答完自动回到问题菜单，可反复问    │
-#  │  · choose 节点可直接推进任务、扣除物品（不够会灰掉并说明原因）         │
-#  └───────────────────────────────────────────────────────────────────────┘
-#
-#  ⚠ 旧格式（只有 lines + after）照常能用，会自动转成 say 节点，行为不变。
-#
-# =============================================================================
-#  字段速查
-# =============================================================================
-#
-#  dialogues:
-#    <对话ID>:                       # 唯一标识
-#      npc: '卡特'                    # Citizens NPC 的显示名，必须一字不差
-#      priority: 20                  # 数字大的优先。同一 NPC 多条对话时从上往下取
-#                                    # 第一条 when 条件满足的
-#      freeze_player: true           # 对话期间锁住移动（默认 true）
-#      when: {...}                   # 条件，满足才用这条；不写 = 永远命中（兜底）
-#      nodes: [ ... ]                # 节点列表，按顺序执行
-#      after: [ '命令' ]             # 对话【全部跑完】后执行的命令
-#
-#  ── 条件 when ────────────────────────────────────────────────────────────
-#      when:
-#        quest_active:      [ 'zhulong:main01' ]      # 正在进行中
-#        quest_completed:   [ 'zhulong:main02' ]      # 已完成
-#        quest_not_started: [ 'zhulong:main03' ]      # 没完成也没在进行
-#        choice_made:       { 'zhulong_final': 'A' }  # 某抉择组选了指定值
-#        choice_any:        [ 'zhulong_final' ]       # 某抉择组做过选择
-#        has_item:                                    # 持有 Oraxen 物品
-#          - { item: 'zhulong_log_drive', count: 1 }
-#        not_has_item:
-#          - { item: 'zhulong_log_drive' }
-#        permission: 'kq.vip'
-#        stage_at_least: { 'zhulong:main03': 2 }      # 阶段序号 >= N
-#        mode: ALL / ANY                              # 默认 ALL；ANY 时配 need: N
-#
-#  ── 节点 say（说一句话） ─────────────────────────────────────────────────
-#      - say:
-#          delay: 0                  # 进入本节点前等待多少 tick
-#          text: '&7[卡特] &f你好。'  # 台词，支持 & 颜色码与 {player}
-#          run: [ '命令' ]            # 播这句同时执行的命令（可多条）
-#          after: 40                 # 说完等多久进下一节点（tick）
-#
-#  ── 节点 ask（可点提问，循环） ───────────────────────────────────────────
-#      - ask:
-#          delay: 0
-#          prompt: '&7你想问什么？'    # 菜单上方引导语（可省略）
-#          questions:
-#            - label: '烛龙站是？'      # 按钮文字
-#              hover: '点击追问'        # 鼠标悬停提示（可省略）
-#              answer: '&7我劝你别问。'  # 点了之后 NPC 的回答
-#              run: [ '命令' ]          # 回答时执行的命令
-#              after: 60               # 答完等多久回菜单（tick）
-#              exit: false             # true = 点了就跳出循环进下一节点
-#              when: {...}             # 只在满足条件时显示这个问题（可省略）
-#
-#  ── 节点 choose（可点抉择） ──────────────────────────────────────────────
-#      - choose:
-#          delay: 0
-#          prompt: '你怎么回答？'
-#          options:
-#            - label: '上交数据'            # 按钮文字
-#              quest: 'zhulong:main05a'    # 选了后接取哪个任务
-#              choice_group: 'zhulong_final'  # 抉择组名（写玩家记录，用于互斥）
-#              value: 'A'                  # 记录的值（不写则按 A/B/C 自动编号）
-#              reply: '&7明智的选择。'       # 选完 NPC 的回应
-#              require_item: 'zhulong_log_drive'  # 需要持有某物品（不够则灰掉）
-#              require_count: 1
-#              consume: true               # 选了就扣除（false 只检查不扣）
-#              run: [ '命令' ]
-#              after: 60
-#              when: {...}
-#
-#  ── 时间换算（记住这个就够） ─────────────────────────────────────────────
-#      1 秒 = 20 tick ；2 秒 = 40 ；3 秒 = 60 ；3.5 秒 = 70 ；5 秒 = 100
-#      6 秒 = 120 ；8 秒 = 160
-#
-#  ⚠️ 一个 NPC 的多条对话：从上往下取第一条 when 满足的。
-#     【务必】给每个 NPC 配一条不写 when 的兜底对话（priority: 0），
-#     否则条件都不满足时玩家右键 NPC 会毫无反应。
-#
-# =============================================================================
-
+# KeranQuests 2 · NPC 对话。可按章节拆为 npc/ 下的多个 yml 文件。
 dialogues:
-
-  # ###########################################################################
-  #  主线01 · 初次见卡特
-  # ###########################################################################
-  #  触发：任务 zhulong:main01 进行中（stage2「和卡特对话」）
-  #  流程：寒暄 → 正题 → 循环问答(ABC) → 说定 → 解冻 → 任务完成
-  # ###########################################################################
   kate_main01:
-    npc: '卡特'
+    npc: 卡特
     priority: 100
     freeze_player: true
     when:
-      quest_active: [ 'zhulong:main01' ]
+      quest_active:
+      - zhulong:main01
     nodes:
-
-      # ---- 玩家先开口 ----
-      - say:
-          delay: 0
-          text: '&7[你] &f你好，我是来……'
-          after: 40                       # 2 秒后卡特接话
-
-      # ---- 卡特的正题 ----
-      - say:
-          delay: 0
-          text: '&7[卡特] &f哦？又一个不怕死的老鼠……好！我敬佩你的勇气！'
+    - say:
+        delay: 0
+        text: '&7[你] &f你好，我是来……'
+        after: 40
+    - say:
+        delay: 0
+        text: '&7[卡特] &f哦？又一个不怕死的老鼠……好！我敬佩你的勇气！'
+        run:
+        - rad play {player} http://www.keran.cc/radio/main_kate_01.mp3
+        after: 60
+    - say:
+        delay: 0
+        text: '&7[卡特] &f所以，你知道你要做的是什么吗？'
+        after: 100
+    - ask:
+        delay: 0
+        prompt: '&8▸ &7你可以直接问他（点击下方文字提问）'
+        questions:
+        - label: 烛龙站是？
+          hover: 点击追问
+          answer: '&7[卡特] &f你不需要知道这么多。'
           run:
-            - 'rad play {player} http://www.keran.cc/radio/main_kate_01.mp3'
+          - rad play {player} http://www.keran.cc/voice/main_kate_02.mp3
           after: 60
-      - say:
-          delay: 0
-          text: '&7[卡特] &f所以，你知道你要做的是什么吗？'
-          after: 100                      # 5 秒后进入提问
-
-      # ---- 循环问答：A/B 可反复问，C 跳出 ----
-      - ask:
-          delay: 0
-          prompt: '&8▸ &7你可以直接问他（点击下方文字提问）'
-          questions:
-            - label: '烛龙站是？'
-              hover: '点击追问'
-              answer: '&7[卡特] &f你不需要知道这么多。'
-              run:
-                - 'rad play {player} http://www.keran.cc/voice/main_kate_02.mp3'
-              after: 60                   # 3 秒后回菜单
-            - label: '我会得到什么？'
-              hover: '点击追问'
-              answer: '&7[卡特] &f你们这些老鼠最想要的，身份卡。'
-              run:
-                - 'rad play {player} http://www.keran.cc/voice/main_kate_03.mp3'
-              after: 70                   # 3.5 秒后回菜单
-            - label: '我没有问题了'
-              hover: '结束提问，继续'
-              exit: true                  # 跳出循环 → 进下一节点
-              after: 20
-
-      # ---- 收尾：交代目的地 ----
-      - say:
-          delay: 0
-          text: '&7[卡特] &f就这么定了。不过，你这种渣滓不配浪费联合的空运资源，'
-          after: 0                        # 下一句紧接着，形成连续说话
-      - say:
-          delay: 0
-          text: '&7[卡特] &f自己想办法到烛龙站，然后联系我。'
+        - label: 我会得到什么？
+          hover: 点击追问
+          answer: '&7[卡特] &f你们这些老鼠最想要的，身份卡。'
           run:
-            - 'rad play {player} http://www.keran.cc/voice/main_kate_04.mp3'
-          after: 120                      # 6 秒后解冻
-
-  # ###########################################################################
-  #  主线03 · 卡特交代任务
-  # ###########################################################################
-  #  触发：任务 zhulong:main03 进行中（stage1「和卡特对话」）
-  #  台词严格按需求脚本：
-  #    卡特：居然活着回来了……好，说明一下情况，我需要烛龙站主楼一台电脑上的
-  #          烛龙站数据日志，把他找到，带回来，要快，而且别惊动楼里的机械守卫。
-  #    → /rad play main_kate_07.mp3
-  #    → 延迟八秒 → 解冻 → stage1 完成
-  # ###########################################################################
+          - rad play {player} http://www.keran.cc/voice/main_kate_03.mp3
+          after: 70
+        - label: 我没有问题了
+          hover: 结束提问，继续
+          exit: true
+          after: 20
+    - say:
+        delay: 0
+        text: '&7[卡特] &f就这么定了。不过，你这种渣滓不配浪费联合的空运资源，'
+        after: 0
+    - say:
+        delay: 0
+        text: '&7[卡特] &f自己想办法到烛龙站，然后联系我。'
+        run:
+        - rad play {player} http://www.keran.cc/voice/main_kate_04.mp3
+        after: 120
   kate_main03:
-    npc: '卡特'
+    npc: 卡特
     priority: 90
     freeze_player: true
     when:
-      quest_active: [ 'zhulong:main03' ]
+      quest_active:
+      - zhulong:main03
     nodes:
-      - say:
-          delay: 0
-          text: '&7[卡特] &f居然活着回来了……好，说明一下情况。'
-          after: 40                       # 2 秒后接下一句
-      - say:
-          delay: 0
-          text: '&7[卡特] &f我需要烛龙站主楼一台电脑上的烛龙站数据日志，把他找到，带回来。'
-          run:
-            - 'rad play {player} http://www.keran.cc/voice/main_kate_07.mp3'
-          after: 0                        # 与下一句连着说
-      - say:
-          delay: 0
-          text: '&7[卡特] &f要快，而且别惊动楼里的机械守卫。'
-          after: 160                      # 8 秒后解冻 → 对话结束 → main03 stage1 完成
-
-  # ###########################################################################
-  #  主线04 · 抉择：上交数据 / 谎称没找到
-  # ###########################################################################
-  #  【关键】选项带物品门槛：没拿到 zhulong_log_drive 的玩家看到「上交数据」是灰的，
-  #         鼠标悬停会告诉他还差什么。
-  # ###########################################################################
+    - say:
+        delay: 0
+        text: '&7[卡特] &f居然活着回来了……好，说明一下情况。'
+        after: 40
+    - say:
+        delay: 0
+        text: '&7[卡特] &f我需要烛龙站主楼一台电脑上的烛龙站数据日志，把他找到，带回来。'
+        run:
+        - rad play {player} http://www.keran.cc/voice/main_kate_07.mp3
+        after: 0
+    - say:
+        delay: 0
+        text: '&7[卡特] &f要快，而且别惊动楼里的机械守卫。'
+        after: 160
   kate_main04:
-    npc: '卡特'
+    npc: 卡特
     priority: 95
     freeze_player: true
     when:
-      quest_active: [ 'zhulong:main04' ]
+      quest_active:
+      - zhulong:main04
     nodes:
-      # ★ 这一行 run 是关键：
-      #   下面的 choose 会 accept(main05a/main05b)，而主线并发上限是 1。
-      #   若此刻 main04 还挂着 ACTIVE，accept 会被「主线并发上限」拒掉 →
-      #   触发 rollback → 玩家卡在「抉择点了、分支没接上、main04 也没了」。
-      #   所以在对话【开头】先把 main04 结算掉：并发名额腾出来，
-      #   而且「玩家进入这段对话」本身就等价于「已向卡特复命」。
-      - say:
-          delay: 0
-          text: '&7[卡特] &f你找到我要的东西了吗？'
-          run:
-            - 'kquests progress {player} zhulong:main04'
-          after: 40
-
-      - choose:
-          delay: 0
-          prompt: '&8▸ &7你要怎么回答？（点击下方文字）'
-          options:
-            # --- A：说真话，上交数据 ---
-            - label: '说真话，上交数据'
-              hover: '交出数据日志，进入合作路线'
-              quest: 'zhulong:main05a'
-              choice_group: 'zhulong_final'
-              value: 'A'
-              require_item: 'zhulong_log_drive'
-              require_count: 1
-              consume: true               # 选了就扣掉
-              reply: '&7[卡特] &f明智的选择！现在等着吧，我会找你的。'
-              after: 60
-            # --- B：说假话，谎称没找到 ---
-            - label: '说假话，没找到'
-              hover: '保留数据日志，进入另一条路线'
-              quest: 'zhulong:main05b'
-              choice_group: 'zhulong_final'
-              value: 'B'
-              reply: '&7[卡特] &f……好吧，你在这等会。'
-              after: 60
-
-  # ###########################################################################
-  #  主线05A · 合作线：卡特找你谈收尾
-  # ###########################################################################
-  #  触发：任务 zhulong:main05a 进行中
-  #  走完这段对话 → main05a stage1 完成 → 发奖励
-  # ###########################################################################
+    - say:
+        delay: 0
+        text: '&7[卡特] &f你找到我要的东西了吗？'
+        after: 40
+    - choose:
+        delay: 0
+        prompt: '&8▸ &7你要怎么回答？（点击下方文字）'
+        options:
+        - label: 说真话，上交数据
+          hover: 交出数据日志，进入合作路线
+          quest: zhulong:main05a
+          choice_group: zhulong_final
+          value: A
+          require_item: zhulong_log_drive
+          require_count: 1
+          consume: true
+          reply: '&7[卡特] &f明智的选择！现在等着吧，我会找你的。'
+          after: 60
+          complete_quest: zhulong:main04
+        - label: 说假话，没找到
+          hover: 保留数据日志，进入另一条路线
+          quest: zhulong:main05b
+          choice_group: zhulong_final
+          value: B
+          reply: '&7[卡特] &f……好吧，你在这等会。'
+          after: 60
+          complete_quest: zhulong:main04
   kate_main05a:
-    npc: '卡特'
+    npc: 卡特
     priority: 88
     freeze_player: true
     when:
-      quest_active: [ 'zhulong:main05a' ]
-      # 抉择对话（kate_main04）播完时会把 stage1 顺带顶掉，
-      # 所以这段实际出现在「玩家又回来找卡特闲聊」的场合 ——
-      # 台词据此写成催他回烛龙站，而不是「跟我走」。
+      quest_active:
+      - zhulong:main05a
     nodes:
-      - say:
-          delay: 0
-          text: '&7[卡特] &f数据我看过了。楼里那东西，得有人去清干净。'
-          after: 40
-      - say:
-          delay: 0
-          text: '&7[卡特] &f还杵在这干嘛？回烛龙站待命，等我信号。'
-          after: 60
-
-  # ###########################################################################
-  #  主线05B · 决裂线：卡特给点东西打发你
-  # ###########################################################################
-  #  触发：任务 zhulong:main05b 进行中
-  #  台词即"给点东西让玩家滚蛋"，走完 → main05b stage1 完成 → 发奖励
-  # ###########################################################################
+    - say:
+        delay: 0
+        text: '&7[卡特] &f数据我看过了。楼里那东西，得有人去清干净。'
+        after: 40
+    - say:
+        delay: 0
+        text: '&7[卡特] &f还杵在这干嘛？回烛龙站待命，等我信号。'
+        after: 60
   kate_main05b:
-    npc: '卡特'
+    npc: 卡特
     priority: 87
     freeze_player: true
     when:
-      quest_active: [ 'zhulong:main05b' ]
+      quest_active:
+      - zhulong:main05b
     nodes:
-      - say:
-          delay: 0
-          text: '&7[卡特] &f……行吧，没找到就没找到。'
-          after: 40
-      - say:
-          delay: 0
-          text: '&7[卡特] &f拿着这些，别让我再看见你。'
-          after: 60
-
-  # ###########################################################################
-  #  支线01 · 黑市商人：冰芯样本
-  # ###########################################################################
-  #  这个 NPC 配了【三条】对话，按任务进度自动切换 —— 演示 v2 的核心能力：
-  #    stage>=2（拿着东西回来） → dealer_deliver（收货抉择）
-  #    否则（刚接任务）         → dealer_brief（交代任务）
-  #    没接任务（兜底）         → dealer_default（闲聊）
-  # ###########################################################################
-
-  # ---- ① 收货：stage1 之后优先命中（priority 最高） ----
+    - say:
+        delay: 0
+        text: '&7[卡特] &f……行吧，没找到就没找到。'
+        after: 40
+    - say:
+        delay: 0
+        text: '&7[卡特] &f拿着这些，别让我再看见你。'
+        after: 60
   dealer_deliver:
-    npc: '黑市商人'
+    npc: 黑市商人
     priority: 100
     freeze_player: true
     when:
-      quest_active: [ 'zhulong:side01' ]
-      stage_at_least: { 'zhulong:side01': 2 }
+      quest_active:
+      - zhulong:side01
+      stage_at_least:
+        zhulong:side01: 2
     nodes:
-      - say:
-          delay: 0
-          text: '&7[黑市商人] &f你找到我要的东西了？'
-          after: 40                      # 2 秒后给选项
-
-      - choose:
-          delay: 0
-          prompt: '&8▸ &7（点击下方文字）'
-          options:
-            # --- A：还没有 → 对话结束，任务【停在】stage3 ---
-            - label: '不，还没有'
-              reply: '&7[黑市商人] &f那还不快滚。'
-              after: 20
-              # 不配 quest → 不推进任务，玩家之后还能再来交
-            # --- B：交货 → 扣冰芯 → 对话结束即完成 stage3 → 发 38 钻石 ---
-            #   不配 quest：本选项不接新任务。
-            #   扣掉冰芯后，对话走完 → finish() → npc_talk 判定通过
-            #   → side01 stage3 完成 → 任务完成 → 发奖励。
-            - label: '拿，给你'
-              hover: '交出冰芯样本'
-              require_item: 'ice_core_sample'
-              require_count: 1
-              consume: true               # 选了就扣掉
-              reply: '&7[黑市商人] &f好！好！不错！拿着，这是给你的。'
-              after: 60
-
-  # ---- ② 交代任务：刚接任务时 ----
+    - say:
+        delay: 0
+        text: '&7[黑市商人] &f你找到我要的东西了？'
+        after: 40
+    - choose:
+        delay: 0
+        prompt: '&8▸ &7（点击下方文字）'
+        options:
+        - label: 不，还没有
+          reply: '&7[黑市商人] &f那还不快滚。'
+          after: 20
+          end: true
+        - label: 拿，给你
+          hover: 交出冰芯样本
+          require_item: ice_core_sample
+          require_count: 1
+          consume: true
+          reply: '&7[黑市商人] &f好！好！不错！拿着，这是给你的。'
+          after: 60
+          advance_talk: true
   dealer_brief:
-    npc: '黑市商人'
+    npc: 黑市商人
     priority: 50
     freeze_player: true
     when:
-      quest_active: [ 'zhulong:side01' ]
+      quest_active:
+      - zhulong:side01
     nodes:
-      - say:
-          delay: 0
-          text: '&7[黑市商人] &f长话短说，我知道你个不要命的最近去了烛龙站。'
-          after: 40
-      - say:
-          delay: 0
-          text: '&7[黑市商人] &f我对那边的冰芯样本很眼馋，你要是能给我找一个回来，'
-          after: 0
-      - say:
-          delay: 0
-          text: '&7[黑市商人] &f我就给你一大笔钱，ok？快去吧。'
-          after: 100                     # 5 秒后解冻
-
-  # ---- ③ 兜底闲聊 ----
+    - say:
+        delay: 0
+        text: '&7[黑市商人] &f长话短说，我知道你个不要命的最近去了烛龙站。'
+        after: 40
+    - say:
+        delay: 0
+        text: '&7[黑市商人] &f我对那边的冰芯样本很眼馋，你要是能给我找一个回来，'
+        after: 0
+    - say:
+        delay: 0
+        text: '&7[黑市商人] &f我就给你一大笔钱，ok？快去吧。'
+        after: 100
   dealer_default:
-    npc: '黑市商人'
+    npc: 黑市商人
     priority: 0
     freeze_player: false
     nodes:
-      - say:
-          delay: 0
-          text: '&7[黑市商人] &f看货吗？没货就别挡道。'
-          after: 40
-
-
-  # ###########################################################################
-  #  卡特的兜底对话 —— 没任务时说什么
-  # ###########################################################################
-  #  ⚠ 必须有！否则玩家在非任务阶段右键卡特会【毫无反应】
-  #  按主线04的抉择结果分流（合作 / 决裂 / 还没做选择）
-  # ###########################################################################
+    - say:
+        delay: 0
+        text: '&7[黑市商人] &f看货吗？没货就别挡道。'
+        after: 40
   kate_default_a:
-    npc: '卡特'
+    npc: 卡特
     priority: 0
     freeze_player: false
     when:
-      choice_made: { 'zhulong_final': 'A' }
+      choice_made:
+        zhulong_final: A
     nodes:
-      - say:
-          delay: 0
-          text: '&7[卡特] &f等着吧，有活儿我会找你。'
-          after: 40
-
+    - say:
+        delay: 0
+        text: '&7[卡特] &f等着吧，有活儿我会找你。'
+        after: 40
   kate_default_b:
-    npc: '卡特'
+    npc: 卡特
     priority: 0
     freeze_player: false
     when:
-      choice_made: { 'zhulong_final': 'B' }
+      choice_made:
+        zhulong_final: B
     nodes:
-      - say:
-          delay: 0
-          text: '&7[卡特] &f……你还有脸来？'
-          after: 40
-
+    - say:
+        delay: 0
+        text: '&7[卡特] &f……你还有脸来？'
+        after: 40
   kate_default_none:
-    npc: '卡特'
+    npc: 卡特
     priority: 0
     freeze_player: false
     nodes:
-      - say:
-          delay: 0
-          text: '&7[卡特] &f别烦我，我在忙。'
-          after: 40
-
-
-  # ===========================================================================
-  #  v1 旧格式示例（lines + after）
-  #  保留它证明【旧配置不用改也能跑】—— 加载时自动转成 say 节点
-  # ===========================================================================
+    - say:
+        delay: 0
+        text: '&7[卡特] &f别烦我，我在忙。'
+        after: 40
   guide_intro:
-    npc: '示例向导'
+    npc: 示例向导
     freeze_player: true
     lines:
-      - delay: 0
-        text: '&7[向导] &f醒了？能站起来就好。'
-      - delay: 30
-        text: '&7[向导] &f这地方不适合新人，先跟我熟悉一下营地。'
-      - delay: 60
-        text: '&7[向导] &f记住：活下去比什么都重要。'
-      - delay: 100
-        text: '&7[向导] &f去吧，任务面板在 &e/kq &f里。'
+    - delay: 0
+      text: '&7[向导] &f醒了？能站起来就好。'
+    - delay: 30
+      text: '&7[向导] &f这地方不适合新人，先跟我熟悉一下营地。'
+    - delay: 60
+      text: '&7[向导] &f记住：活下去比什么都重要。'
+    - delay: 100
+      text: '&7[向导] &f去吧，任务面板在 &e/kq &f里。'
     after:
-      - 'tellraw {player} {"text":"[提示] 输入 /kq 打开任务菜单","color":"yellow"}'
+    - tellraw {player} {"text":"[提示] 输入 /kq 打开任务菜单","color":"yellow"}

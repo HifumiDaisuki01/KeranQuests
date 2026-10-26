@@ -52,6 +52,11 @@ public class KeranQuests extends JavaPlugin {
     private DialogueRunner dialogueRunner;
     private FreezeManager freezeManager;
     private GuiManager guiManager;
+    private com.keran.quests.runtime.BranchService branchService;
+    private com.keran.quests.client.ClientBridge clientBridge;
+    public com.keran.quests.runtime.BranchService getBranchService() { return branchService; }
+    public com.keran.quests.client.ClientBridge getClientBridge() { return clientBridge; }
+    public RegionRunner getRegionRunner() { return regionRunner; }
 
     private OraxenHook oraxenHook;
     private WorldGuardHook worldGuardHook;
@@ -88,12 +93,15 @@ public class KeranQuests extends JavaPlugin {
         // 5. 运行时
         freezeManager = new FreezeManager(this);
         questManager = new QuestManager(this);
+        branchService = new com.keran.quests.runtime.BranchService(this);
         choiceManager = new ChoiceManager(this);
         guiManager = new GuiManager(this);
         dialogueRunner = new DialogueRunner(this);
         dialogueRunner.load();
         regionRunner = new RegionRunner(this);
         regionRunner.start();
+        clientBridge = new com.keran.quests.client.ClientBridge(this);
+        clientBridge.start();
 
         // 6. 事件
         getServer().getPluginManager().registerEvents(guiManager, this);
@@ -142,6 +150,7 @@ public class KeranQuests extends JavaPlugin {
             flushTask.cancel();
             flushTask = null;
         }
+        if (clientBridge != null) clientBridge.stop();
         if (regionRunner != null) regionRunner.stop();
         // 取消未播完的对话任务并解冻玩家，避免残留任务在卸载后刷屏
         if (dialogueRunner != null) dialogueRunner.shutdown();
@@ -179,11 +188,24 @@ public class KeranQuests extends JavaPlugin {
     }
 
     /** 重载全部配置与任务树。 */
-    public void reloadAll() {
-        reloadConfig();
-        int trees = treeLoader.load();
-        dialogueRunner.load();
-        getLogger().info("配置已重载：任务树 " + trees + " 棵。");
+    public boolean reloadAll() {
+        try {
+            org.bukkit.configuration.file.YamlConfiguration config = new org.bukkit.configuration.file.YamlConfiguration();
+            config.load(new java.io.File(getDataFolder(), "config.yml"));
+            var trees = treeLoader.prepare();
+            var dialogues = dialogueRunner.prepare(trees);
+            reloadConfig();
+            treeLoader.commit(trees);
+            dialogueRunner.commit(dialogues);
+            regionRunner.start();
+            oraxenHook.invalidateDefs();
+            clientBridge.refreshAll();
+            getLogger().info("配置已重载：任务树 " + treeLoader.getTreeCount() + " 棵。");
+            return true;
+        } catch (Exception ex) {
+            getLogger().warning("重载失败，继续使用原任务与对话配置：" + ex.getMessage());
+            return false;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -255,9 +277,7 @@ public class KeranQuests extends JavaPlugin {
         return choiceManager;
     }
 
-    public RegionRunner getRegionRunner() {
-        return regionRunner;
-    }
+
 
     public DialogueRunner getDialogueRunner() {
         return dialogueRunner;

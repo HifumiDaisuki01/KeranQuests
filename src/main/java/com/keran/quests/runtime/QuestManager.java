@@ -20,6 +20,7 @@ import org.bukkit.entity.Player;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -345,10 +346,10 @@ public class QuestManager {
         List<Quest> sides = tree.getDedupedByType(QuestType.SIDE);
         if (mains.isEmpty() && sides.isEmpty()) return false;
         for (Quest q : mains) {
-            if (!data.isCompleted(q.getFullId())) return false;
+            if (!isGroupSatisfied(data, q)) return false;
         }
         for (Quest q : sides) {
-            if (!data.isCompleted(q.getFullId())) return false;
+            if (!isGroupSatisfied(data, q)) return false;
         }
         return true;
     }
@@ -456,6 +457,11 @@ public class QuestManager {
     public String accept(Player player, Quest quest) {
         String err = canAccept(player, quest);
         if (err != null) return err;
+        return acceptPrepared(player, quest);
+    }
+
+    /** Only called after a validated handoff, on the server thread. */
+    public String acceptPrepared(Player player, Quest quest) {
 
         PlayerData data = plugin.getPlayerData(player);
         QuestProgress p = data.getOrCreateProgress(quest.getFullId());
@@ -464,16 +470,18 @@ public class QuestManager {
         if (quest.isRepeatable() && quest.isResetProgressOnComplete()) {
             p.clearAllProgress();
         }
-        if (p.getState() == QuestState.FAILED) {
-            p.clearAllProgress();
-        }
+        int startStage = p.getState() == QuestState.FAILED
+                && quest.getResetOnFail() == com.keran.quests.config.model.enums.ResetMode.STAGE
+                ? p.getStageIndex() : 0;
+        if (p.getState() == QuestState.FAILED && startStage == 0) p.clearAllProgress();
 
+        p.newExecution();
         p.setState(QuestState.ACTIVE);
-        p.setStageIndex(0);
+        p.setStageIndex(startStage);
         p.setStartedAt(System.currentTimeMillis());
         p.setFinishedAt(0);
         p.setFailReason(null);
-        p.clearFromStage(0);
+        p.clearFromStage(startStage);
         data.markDirty();
 
         // 互斥组落档
@@ -538,6 +546,7 @@ public class QuestManager {
         // 需要重复触发的行为单独写在守卫外面。
         int stageIdxNow = stageIdx;
         if (p.isStageHandled(stageIdxNow)) return false;
+        if (!consumeStageItems(player, stage, quest, p)) return false;
 
         // 阶段完成（一次性）
         p.markStageHandled(stageIdxNow);
@@ -582,6 +591,34 @@ public class QuestManager {
         return true;
     }
 
+    /** Select the requirements which satisfy ALL/ANY, then consume their items once. */
+    private boolean consumeStageItems(Player player, QuestStage stage, Quest quest, QuestProgress progress) {
+        Map<String, Integer> costs = new java.util.LinkedHashMap<>();
+        int selected = 0;
+        for (int i = 0; i < stage.getRequirements().size(); i++) {
+            Requirement req = stage.getRequirements().get(i);
+            if (!isRequirementSatisfied(player, quest, progress, stage, i)) continue;
+            if (stage.getMode() == StageMode.ANY && selected >= stage.getNeed()) break;
+            selected++;
+            if (req.getType() == RequirementType.ORAXEN_ITEM && req.isConsume()) {
+                costs.merge(req.getItem(), req.target(), Integer::sum);
+            }
+        }
+        for (var cost : costs.entrySet()) {
+            if (plugin.getOraxenHook().countItem(player, cost.getKey()) < cost.getValue()) return false;
+        }
+        if (costs.isEmpty()) return true;
+        org.bukkit.inventory.ItemStack[] before = player.getInventory().getContents();
+        for (int i = 0; i < before.length; i++) if (before[i] != null) before[i] = before[i].clone();
+        for (var cost : costs.entrySet()) {
+            if (plugin.getOraxenHook().removeItem(player, cost.getKey(), cost.getValue()) != cost.getValue()) {
+                player.getInventory().setContents(before);
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** 判定单个阶段是否满足。 */
     public boolean isStageSatisfied(Player player, Quest quest, QuestProgress p, QuestStage stage) {
         List<Requirement> reqs = stage.getRequirements();
@@ -608,8 +645,11 @@ public class QuestManager {
         int progress = p.getRequirementProgress(stageIdx, reqIndex);
 
         switch (req.getType()) {
-            case MM_KILL:
+            case WAIT:
+                return System.currentTimeMillis() - p.getStageStartedAt() >= req.getSeconds() * 1000L;
             case ORAXEN_ITEM:
+                return plugin.getOraxenHook().countItem(player, req.getItem()) >= req.target();
+            case MM_KILL:
             case PLAYER_KILL:
                 return progress >= req.target();
             case REGION_STAY:
@@ -751,6 +791,7 @@ public class QuestManager {
     public void complete(Player player, Quest quest) {
         PlayerData data = plugin.getPlayerData(player);
         QuestProgress p = data.getOrCreateProgress(quest.getFullId());
+        if (p.getState() == QuestState.COMPLETED) return; // API retries must not duplicate rewards
         p.setState(QuestState.COMPLETED);
         p.setStageIndex(quest.getStageCount());
         p.setFinishedAt(System.currentTimeMillis());
@@ -1141,13 +1182,17 @@ public class QuestManager {
     }
 
     /** 触发 NPC 对话要求。 */
-    public boolean fireNpcTalk(Player player, String npcName) {
+    public boolean fireNpcTalk(Player player, String npcName) { return fireNpcTalk(player, npcName, null); }
+
+    public boolean fireNpcTalk(Player player, String npcName, Map<String, String> targets) {
         if (npcName == null) return false;
         PlayerData data = plugin.getPlayerData(player);
         boolean changed = false;
         for (java.util.Map.Entry<String, QuestProgress> e : new ArrayList<>(data.getAllProgress().entrySet())) {
             QuestProgress p = e.getValue();
             if (p.getState() != QuestState.ACTIVE) continue;
+            if (targets != null && !java.util.Objects.equals(targets.get(e.getKey()),
+                    p.getExecutionId() + ":" + p.getStageIndex())) continue;
             Quest quest = plugin.getTreeLoader().resolveQuest(e.getKey());
             if (quest == null) continue;
             int si = p.getStageIndex();
@@ -1215,7 +1260,17 @@ public class QuestManager {
             }
             final String cmd = fill(body, player, quest, stage, failReason);
             if (delay > 0) {
-                Bukkit.getScheduler().runTaskLater(plugin, () -> dispatch(cmd), delay);
+                QuestProgress scheduled = plugin.getPlayerData(player).getProgress(quest.getFullId());
+                String execution = scheduled == null ? null : scheduled.getExecutionId();
+                QuestState initial = scheduled == null ? null : scheduled.getState();
+                Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                    if (!player.isOnline()) return;
+                    QuestProgress current = plugin.getPlayerData(player).getProgress(quest.getFullId());
+                    if (current == null || !java.util.Objects.equals(execution, current.getExecutionId())) return;
+                    boolean live = current.getState() == QuestState.ACTIVE || current.getState() == QuestState.COMPLETED;
+                    if (initial == QuestState.ACTIVE ? !live : current.getState() != initial) return;
+                    dispatch(cmd);
+                }, delay);
             } else {
                 dispatch(cmd);
             }

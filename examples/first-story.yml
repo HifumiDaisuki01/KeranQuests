@@ -1,0 +1,36 @@
+# 无 Oraxen 的最小完整任务树，可直接放入 quests/ 后重载。
+schema: 2
+id: first_story
+name: 第一段旅程
+defaults:
+  type: MAIN
+quests:
+  arrival:
+    name: 初次抵达
+    description: 前往营地，开始新的旅程。
+    steps:
+      - id: arrive
+        name: 抵达营地
+        enter: world:camp
+    rewards:
+      items:
+        - {id: 'minecraft:bread', amount: 10}
+  contact:
+    name: 新的委托
+    after: [arrival]
+    steps:
+      - id: talk
+        name: 与向导交谈
+        talk: 向导
+  prepare:
+    name: 准备物资
+    type: SIDE
+    after: [contact]
+    steps:
+      - id: submit
+        name: 提交三张纸
+        submit: {item: 'minecraft:paper', count: 3}
+    rewards:
+      exp: 100
+      items:
+        - {id: 'minecraft:diamond', amount: 1}

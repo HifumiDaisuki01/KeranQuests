@@ -85,7 +85,7 @@ public class Requirement {
     public static Requirement fromConfig(ConfigurationSection sec) {
         if (sec == null) return null;
         RequirementType type = RequirementType.parse(sec.getString("type"));
-        if (type == null) return null;
+        if (type == null) throw new IllegalArgumentException("未知要求 type：" + sec.getString("type"));
 
         // 展示名：同时兼容 name / display（示例 yml 使用 display，旧配置可能用 name）
         String displayName = firstNonBlank(sec.getString("name", null), sec.getString("display", null));
@@ -104,6 +104,16 @@ public class Requirement {
         String npcName = firstNonBlank(sec.getString("npc_name", null), sec.getString("npc", null));
         String permission = sec.getString("permission", null);
 
+        if (count <= 0 || seconds < 0) throw new IllegalArgumentException("count 必须 > 0，seconds 必须 >= 0");
+        String required = switch (type) {
+            case REGION_ENTER, REGION_STAY, REGION_FORBIDDEN -> region;
+            case ORAXEN_ITEM -> item;
+            case NPC_TALK -> npcName;
+            case CUSTOM_TRIGGER -> key;
+            case PERMISSION -> permission;
+            default -> "ok";
+        };
+        if (required == null || required.isBlank()) throw new IllegalArgumentException(type + " 缺少必需字段");
         int sameVictim = 0;
         ConfigurationSection af = sec.getConfigurationSection("anti_farm");
         if (af != null) {
@@ -131,6 +141,8 @@ public class Requirement {
         switch (type) {
             case MM_KILL:
                 return "击杀 " + String.join("/", mobs) + " " + count + " 只";
+            case WAIT:
+                return "等待 " + seconds + " 秒";
             case REGION_STAY:
                 return "在 " + region + " 停留 " + seconds + " 秒";
             case REGION_ENTER:
@@ -159,6 +171,7 @@ public class Requirement {
             case ORAXEN_ITEM:
             case PLAYER_KILL:
                 return Math.max(1, count);
+            case WAIT:
             case REGION_STAY:
                 return Math.max(1, seconds);
             default:

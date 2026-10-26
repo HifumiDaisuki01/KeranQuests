@@ -1,67 +1,31 @@
-plugins {
-    id 'java'
-}
-
+plugins { id 'java' }
 group = 'com.keran'
-version = '1.2.1'
-
+version = '2.0.0'
 repositories {
     mavenCentral()
     maven { url = uri('https://repo.papermc.io/repository/maven-public/') }
-    maven { url = uri('https://maven.enginehub.org/repo/') }
     maven { url = uri('https://repo.extendedclip.com/content/repositories/placeholderapi/') }
-    maven { url = uri('https://repo.citizensnpcs.co/') }
-    maven { url = uri('https://nexus.phoenixdevt.fr/repository/maven-public/') }
 }
-
+configurations { mockitoAgent }
 dependencies {
     compileOnly 'io.papermc.paper:paper-api:1.20.1-R0.1-SNAPSHOT'
-    compileOnly 'com.sk89q.worldguard:worldguard-bukkit:7.0.9'
-    compileOnly 'com.sk89q.worldedit:worldedit-bukkit:7.2.15'
     compileOnly 'me.clip:placeholderapi:2.11.7'
-    // Citizens / MythicMobs / Oraxen / Vault 全部以本地 jar 提供（见 libs/）
-    // —— 走 Maven 会因沙箱 TLS 与传递依赖（libby 等）失败，本地 jar 更可靠。
-    compileOnly fileTree(dir: 'libs', include: ['*.jar'])
+    testImplementation 'io.papermc.paper:paper-api:1.20.1-R0.1-SNAPSHOT'
+    testImplementation 'me.clip:placeholderapi:2.11.7'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testImplementation 'org.mockito:mockito-core:5.14.2'
+    mockitoAgent('org.mockito:mockito-core:5.14.2') { transitive = false }
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
-
-java {
-    // 沙箱里只有 JDK 20；用 toolchain 会因找不到 17 而失败，
-    // 因此改为直接用当前 JDK + --release 17 产出 Java 17 字节码。
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
-}
-
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
-    options.release = 17
-}
-
-// 简易 fat-jar：只把 SQLite 驱动打进去（如后续需要）
+java { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8'; options.release = 17 }
+test { useJUnitPlatform(); jvmArgs "-javaagent:${configurations.mockitoAgent.singleFile}" }
 jar {
-    // 显式声明依赖 classes/resources，避免 Gradle 判定 UP-TO-DATE 后跳过打包
-    dependsOn tasks.named('classes')
-    inputs.files(sourceSets.main.output).withPropertyName('mainOutput')
-
     archiveBaseName.set('KeranQuests')
-    archiveClassifier.set('')
     destinationDirectory.set(file("$rootDir/out"))
-    // 每次构建都重新打包，防止产物不刷新
-    outputs.upToDateWhen { false }
-
-    manifest {
-        attributes(
-            'Implementation-Title': 'KeranQuests',
-            'Implementation-Version': version
-        )
-    }
+    manifest { attributes('Implementation-Title': 'KeranQuests', 'Implementation-Version': version) }
 }
-
-// 把 plugin.yml 里的 ${version} 替换成实际构建版本号，
-// 避免出现「jar 名 1.0.2 但插件自报 1.0.0」的错位。
 processResources {
     inputs.property 'version', version
-    outputs.upToDateWhen { false }
-    filesMatching('plugin.yml') {
-        expand(version: version)
-    }
+    filesMatching('plugin.yml') { expand(version: version) }
 }

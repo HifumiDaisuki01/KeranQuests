@@ -41,6 +41,7 @@ public class GuiManager implements Listener {
     private final KeranQuests plugin;
 
     /** 玩家当前打开的界面类型 */
+    private final Map<UUID, Inventory> inventories = new HashMap<>();
     private final Map<UUID, View> currentView = new HashMap<>();
     /** 玩家在每个界面的翻页状态 */
     private final Map<UUID, Integer> pageState = new HashMap<>();
@@ -116,6 +117,7 @@ public class GuiManager implements Listener {
     // ==================================================================
 
     public void openTreeList(Player player, int page) {
+        if (plugin.getClientBridge() != null && plugin.getClientBridge().open(player)) return;
         List<QuestTree> trees = new ArrayList<>(plugin.getTreeLoader().getTrees());
         trees.removeIf(t -> !t.isEnabled());
 
@@ -584,6 +586,7 @@ public class GuiManager implements Listener {
     // ==================================================================
 
     public void openQuestDetail(Player player, String fullId) {
+        if (plugin.getClientBridge() != null && plugin.getClientBridge().open(player, fullId)) return;
         Quest quest = plugin.getTreeLoader().resolveQuest(fullId);
         if (quest == null) {
             player.closeInventory();
@@ -653,7 +656,10 @@ public class GuiManager implements Listener {
         for (Quest.RewardItem ri : quest.getRewardItems()) {
             infoLore.add("&8 · &f" + ri.getRawId() + " &7x" + ri.getAmount());
         }
-        if (quest.getMoney() <= 0 && quest.getExp() <= 0 && quest.getRewardItems().isEmpty()) {
+        for (String label : quest.getRewardDisplay()) infoLore.add("&8 · &f" + label);
+        if (quest.getRewardDisplay().isEmpty() && !quest.getRewardCommands().isEmpty()) infoLore.add("&8 · &7完成后发放任务奖励");
+        if (quest.getMoney() <= 0 && quest.getExp() <= 0 && quest.getRewardItems().isEmpty()
+                && quest.getRewardCommands().isEmpty() && quest.getRewardDisplay().isEmpty()) {
             infoLore.add("&8 · &7无");
         }
         if (quest.isRepeatable()) {
@@ -668,6 +674,7 @@ public class GuiManager implements Listener {
 
         // ---- 阶段列表（按可见性） ----
         List<Integer> visibleStages = getVisibleStages(quest, p);
+        if (visibleStages.size() > 14) visibleStages = visibleStages.subList(visibleStages.size() - 14, visibleStages.size());
         int[] stageSlots = {19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34};
         for (int i = 0; i < visibleStages.size() && i < stageSlots.length; i++) {
             int si = visibleStages.get(i);
@@ -701,7 +708,7 @@ public class GuiManager implements Listener {
         if (state == QuestState.ACTIVE) {
             inv.setItem(48, new GuiItem(plugin, cfg("gui.icons.active", "quest_ui_active"), Material.YELLOW_DYE)
                     .name("&e追踪此任务")
-                    .lore("&7让 &f%kq_current% &7显示这个任务")
+                    .lore("&7在任务追踪中显示此任务")
                     .action("track", quest.getFullId())
                     .build());
 
@@ -893,6 +900,7 @@ public class GuiManager implements Listener {
     // ==================================================================
 
     public void openChoice(Player player, Quest quest, QuestStage stage) {
+        if (plugin.getClientBridge() != null && plugin.getClientBridge().open(player, quest.getFullId())) return;
         List<QuestStage.Choice> choices = stage.getChoices();
 
         // 根据选项数量动态决定界面大小与槽位：
@@ -975,9 +983,10 @@ public class GuiManager implements Listener {
     public void onClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) return;
         View view = currentView.get(player.getUniqueId());
-        if (view == null) return;
+        if (view == null || event.getView().getTopInventory() != inventories.get(player.getUniqueId())) return;
 
-        event.setCancelled(true);   // 永远阻止拖拽
+        event.setCancelled(true);
+        if (event.getRawSlot() < 0 || event.getRawSlot() >= event.getView().getTopInventory().getSize()) return;
 
         ItemStack clicked = event.getCurrentItem();
         if (clicked == null || clicked.getType().isAir()) return;
@@ -1031,16 +1040,7 @@ public class GuiManager implements Listener {
         });
     }
 
-    /**
-     * 重新打开当前任务的抉择界面（任务详情页「继续抉择」按钮）。
-     *
-     * <p>为什么要清 handled 标记：{@code checkStageCompletion} 开头有防重复守卫
-     * {@code if (p.isStageHandled(stageIdx)) return false;}，一旦抉择界面弹过一次
-     * 就会打上标记，之后再也不会弹。这里把它清掉，保证点击必定能打开界面。
-     *
-     * <p>注意只清 handled、<b>不清 completed</b>：completed 表示"阶段条件已满足"，
-     * 是真实进度，清掉反而会让阶段状态显示回退。
-     */
+    /** 重新显示当前抉择，不撤销已经持久化的阶段结算标记。 */
     private void handleReopenChoice(Player player, String fullId) {
         Quest quest = plugin.getTreeLoader().resolveQuest(fullId);
         if (quest == null) return;
@@ -1059,7 +1059,7 @@ public class GuiManager implements Listener {
             openQuestDetail(player, fullId);
             return;
         }
-        p.unmarkStageHandled(idx);
+        // 重开界面不撤销阶段结算记录。
         data.markDirty();
         plugin.getPlayerDataStore().save(data);
         plugin.getChoiceManager().openChoice(player, quest, stage);
@@ -1123,6 +1123,11 @@ public class GuiManager implements Listener {
     }
 
     @EventHandler
+    public void onDrag(org.bukkit.event.inventory.InventoryDragEvent event) {
+        if (event.getView().getTopInventory() == inventories.get(event.getWhoClicked().getUniqueId())) event.setCancelled(true);
+    }
+
+    @EventHandler
     public void onClose(InventoryCloseEvent event) {
         if (!(event.getPlayer() instanceof Player p)) return;
         UUID id = p.getUniqueId();
@@ -1146,6 +1151,7 @@ public class GuiManager implements Listener {
             return;
         }
 
+        inventories.remove(id);
         currentView.remove(id);
         pageState.remove(id);
         suppressClose.remove(id);
@@ -1173,12 +1179,14 @@ public class GuiManager implements Listener {
      * 需要先登记 suppress 标记，避免 {@link #onClose} 把刚写入的 currentView 擦掉。
      */
     private void openGui(Player player, Inventory inv) {
+        inventories.put(player.getUniqueId(), inv);
         suppressNextClose(player);
         player.openInventory(inv);
     }
 
     /** 玩家下线时清理其全部 GUI 状态（由 PlayerLifecycleListener 调用）。 */
     public void forget(UUID id) {
+        inventories.remove(id);
         currentView.remove(id);
         pageState.remove(id);
         suppressClose.remove(id);

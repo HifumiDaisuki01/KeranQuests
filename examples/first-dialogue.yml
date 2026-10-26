@@ -1,0 +1,7 @@
+dialogues:
+  guide_intro:
+    npc: 向导
+    when:
+      quest_active: ['first_story:contact']
+    nodes:
+      - say: {text: '欢迎来到营地。准备好后，我们就出发。', after: 60}

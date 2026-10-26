@@ -1,640 +1,274 @@
-# =============================================================================
-#  「一烛燃尽万年冰」—— 烛龙基地 主线 / 支线 正式任务树
-# =============================================================================
-#  树 ID：zhulong   （文件名即树 ID，请勿改名）
-#  文件位置：plugins/KeranQuests/quests/zhulong.yml
-#  改完执行：/kq reload
-#
-#  ── 这部分是【正式任务】，不是教学模板 ──────────────────────────────────
-#  旧版 zhulong.yml（教学模板）已另存为 zhulong-example.yml，保留全部写法演示。
-#  本文件只写真实任务，引用真实资源。
-#
-#  ── ⚠ 上线前必须核实的资源（当前服务器上【尚不存在】）────────────────────
-#    NPC（Citizens）：
-#      · 卡特          —— 深空联合负责人，位于 space 世界的 npc_kate 区域
-#      · 黑市商人      —— 位于 snow（雪原）的 D2 区域
-#    WorldGuard 区域（**注意世界名，已在下面标出**）：
-#      · npc_kate      —— 卡特所在区域，位于 **space** 世界（主线01 stage1 判定用）
-#      · zhulongzhan   —— 烛龙站区域，位于 **snow** 世界（主线02 stage1 判定用）
-#      ⚠ region_enter 要求「区域名 + 世界名」同时对上，只对上区域名不算
-#        （region 名在不同世界可以重复，插件会先按世界过滤再匹配名字）
-#    Oraxen 物品（当前 oraxen/ 目录下不存在）：
-#      · zhulong_log_drive      烛龙站数据日志（主线03 获取 / 主线04 上交判定）
-#      · ice_core_sample   冰芯样本（支线01 获取与上交判定）
-#    音频（/rad play 走 RadBroadcast）：
-#      · http://www.keran.cc/radio/main_kate_01.mp3
-#      · http://www.keran.cc/voice/main_kate_02.mp3  ~ main_kate_07.mp3
-#    第三方：
-#      · ExtractionPoints 撤离判定（主线02 stage3 / 主线03 stage3）
-#
-#  ── 触发链一览 ─────────────────────────────────────────────────────────
-#    主线01  找卡特 → 对话（循环问答+抉择）→ 完成，得 10 面包
-#    主线02  到烛龙站 → 无线电两段 → 撤离（EP 触发）→ 完成，得 20 面包
-#    主线03  找卡特 → 取数据日志 → 撤离 → 完成，得 40 面包
-#    主线04  持数据日志找卡特 → 抉择 A/B     → 解锁 05A / 05B
-#    主线05A 合作线（A 支）  主线05B 决裂线（B 支）
-#    支线01  黑市商人：取冰芯样本 → 交货 → 得 38 钻石
-#    支线02  循环任务（A 线解锁）
-# =============================================================================
-
+# KeranQuests 2 · 简化配置；旧版 stages / requirements 写法继续支持
 id: zhulong
 name: '&6一烛燃尽万年冰'
 description: '&7从路人口中了解到，深空联合正在调查二十年前突然废弃的科考前哨站——烛龙站。'
-icon: 'quest_ui_main'
+icon: quest_ui_main
 order: 2
 enabled: true
-
-main_quest_limit: 1              # 主线同时只能做 1 个
-side_quest_limit: 3              # 支线同时最多 3 个
-
-# -----------------------------------------------------------------------------
-#  GUI 布局
-# -----------------------------------------------------------------------------
-layout:
-  - "0 0 0 0 0 0 0 0 0"
-  - "0 main01 main02 0 0 0 0 0 0"
-  - "0 main03 main04 0 0 side01 0 0 0"
-  - "0 main05a 0 0 0 side02 0 0 0"
-  - "0 main05b 0 0 0 daily01 0 0 0"
-
-# 整树前置：需完成新手树
+main_quest_limit: 1
+side_quest_limit: 3
 prerequisites:
   tree_completed_all:
-    - 'tutorial'
-
-
+  - tutorial
 quests:
-
-  # ===========================================================================
-  #  主线01 · 雪中之烛，冰下之龙
-  #  「好了，我得先找到卡特……」
-  #  流程：进入 npc_kate 区域 → 右键卡特触发对话（freeze）
-  #        对话内含【循环问答 ABC】+ 收尾对白 → 对话播完任务完成 → 10 面包
-  # ===========================================================================
   main01:
     name: '&6主线01 · 雪中之烛，冰下之龙'
-    type: MAIN
     weight: 100
-    icon: 'quest_ui_main'
-    stage_visibility: SEQUENTIAL
-
     description: '&7好了，我得先找到卡特……'
-
-    # 放弃无惩罚无 CD
-    abandon:
-      allowed: true
-      cooldown: 0
-
-    stages:
-      # ---- stage1：找到卡特 ----
-      - id: find_kate
-        name: '&f找到深空联合的负责人卡特'
-        mode: ALL
-        requirements:
-          - type: region_enter
-            region: 'npc_kate'
-            world: 'space'
-            display: '找到卡特'
-            description: '前往卡特的所在地'
-
-      # ---- stage2：和卡特对话 ----
-      # 对话内容见 npc/dialogue.yml 的 kate_main01
-      # ★ 语义：配了对话的 NPC，是在【对话全部播完之后】才判定完成，
-      #         不是右键那一瞬间。所以 freeze 和解冻都发生在对话内部。
-      - id: talk_to_kate
-        name: '&f和卡特对话'
-        mode: ALL
-        requirements:
-          - type: npc_talk
-            npc: '卡特'
-            display: '与卡特交谈'
-            description: '右键卡特，听他把话说完'
-
     on_start:
-      - 'tellraw {player} {"text":"[提示] 去 space 的 npc_kate 区域找卡特。","color":"yellow"}'
-
+    - tellraw {player} {"text":"[提示] 去 space 的 npc_kate 区域找卡特。","color":"yellow"}
     on_complete:
-      - 'minecraft:title {player} title {"text":"主线01 完成","color":"gold"}'
-      - 'minecraft:title {player} subtitle {"text":"自己想办法到烛龙站","color":"gray"}'
-      - 'tellraw {player} {"text":"[结算] 获得 10 个面包。","color":"gold"}'
-
+    - minecraft:title {player} title {"text":"主线01 完成","color":"gold"}
+    - minecraft:title {player} subtitle {"text":"自己想办法到烛龙站","color":"gray"}
+    - tellraw {player} {"text":"[结算] 获得 10 个面包。","color":"gold"}
     rewards:
-      commands:
-        - 'give {player} minecraft:bread 10'
-        - 'tellraw {player} {"text":"[奖励] 面包 ×10","color":"gold"}'
-
-  # ===========================================================================
-  #  主线02 · 抵达烛龙站
-  #  「想办法抵达烛龙站」
-  #  流程：进 zhulongzhan 区域 → stage2 无线电两段（不 freeze）
-  #        → stage3 交给第三方撤离插件判定 → 完成，20 面包
-  # ===========================================================================
+      items:
+      - id: minecraft:bread
+        amount: 10
+    steps:
+    - id: find_kate
+      name: '&f找到深空联合的负责人卡特'
+      enter: space:npc_kate
+    - id: talk_to_kate
+      name: '&f和卡特对话'
+      talk: 卡特
   main02:
     name: '&6主线02 · 抵达烛龙站'
-    type: MAIN
     weight: 99
-    icon: 'quest_ui_main'
-    stage_visibility: SEQUENTIAL
-    # ★ 前置未满足时显示为「？？？ / 完成前置任务以解锁…」，图标 quest_ui_unknown，
-    #   且不可点击（防止点进去偷看阶段详情）。前置做完后自动变回真名。
-    #   机制见 QuestManager.getUnlockStatus：hidden + 前置未满足 → LOCKED_HIDDEN。
     hidden: true
-
     description: '&7想办法抵达烛龙站。'
-
-    prerequisites:
-      quest_completed_all:
-        - 'zhulong:main01'
-
-    abandon:
-      allowed: true
-      cooldown: 0
-
-    stages:
-      # ---- stage1：抵达烛龙站 ----
-      # 需求原文：「玩家进入 wg 区域 zhulongzhan 即可直接完成任务，进入 stage2」
-      #
-      # 进区域即完成。完成的同一时刻，开始播第一段无线电（见下方 stage1 的
-      # commands_on_complete），于是玩家感觉是「一进站就听到卡特在喊话」。
-      - id: arrive
-        name: '&f抵达烛龙站'
-        mode: ALL
-        # ★ 关键时序：进区域 → 立刻播第一段 → 5 秒后播第二段 → 再 6 秒补触发器
-        commands_on_complete:
-          - 'tellraw {player} {"text":"[卡特·无线电] 看来你已经到那该死的地方了，现在赶紧滚回来，我们需要商讨下一步计划","color":"aqua"}'
-          - 'rad play {player} http://www.keran.cc/voice/main_kate_05.mp3'
-          - 'delay 100 | tellraw {player} {"text":"[卡特·无线电] 我已经把撤离坐标通过 Hermes 发给你了，最好别死在路上了，哈哈哈哈哈","color":"aqua"}'
-          - 'delay 100 | rad play {player} http://www.keran.cc/voice/main_kate_06.mp3'
-          - 'delay 220 | kquests trigger {player} zhulong_main02_recall'
-        requirements:
-          - type: region_enter
-            region: 'zhulongzhan'
-            world: 'snow'
-            display: '进入烛龙站'
-            description: '进入烛龙站区域即完成'
-
-      # ---- stage2：快撤（无线电，不 freeze，纯演出）----
-      # 需求原文：「进入后先是无线电通讯，直接触发给玩家，而且不需要 freeze 玩家」
-      #
-      # 本阶段**没有玩家操作**，纯粹是为了让两段无线电播完才放行。
-      # 做法：stage1 完成时把本阶段的触发器延迟 11 秒补上（100+120 tick），
-      #       于是玩家听到的节奏是：
-      #         第 0 秒  第一段无线电（"赶紧滚回来…"）
-      #         第 5 秒  第二段无线电（"撤离坐标发给你了…"）
-      #         第 11 秒 本阶段完成 → 自动进 stage3「想办法撤离」
-      # 全程无需操作、无 freeze，与需求里的「延迟五秒 / 延迟六秒」一致。
-      - id: recall
-        name: '&f快撤'
-        mode: ALL
-        requirements:
-          - type: custom_trigger
-            key: 'zhulong_main02_recall'
-            display: '接收无线电指令'
-            description: '收听卡特的撤离指令'
-
-      # ---- stage3：想办法撤离（第三方撤离插件判定）----
-      - id: extract
-        name: '&f想办法撤离'
-        mode: ALL
-        requirements:
-          - type: custom_trigger
-            key: 'zhulong_main02_extracted'
-            display: '撤离'
-            description: '在撤离点完成撤离（由 ExtractionPoints 判定）'
-
     on_start:
-      - 'tellraw {player} {"text":"[电台] 目标：烛龙站。自己想办法过去。","color":"yellow"}'
-
+    - tellraw {player} {"text":"[电台] 目标：烛龙站。自己想办法过去。","color":"yellow"}
     on_complete:
-      - 'tellraw {player} {"text":"[卡特·无线电] 居然活着回来了……来上次的地方找我。","color":"aqua"}'
-      - 'tellraw {player} {"text":"[结算] 获得 20 个面包。","color":"gold"}'
-
+    - tellraw {player} {"text":"[卡特·无线电] 居然活着回来了……来上次的地方找我。","color":"aqua"}
+    - tellraw {player} {"text":"[结算] 获得 20 个面包。","color":"gold"}
     rewards:
-      commands:
-        - 'give {player} minecraft:bread 20'
-        - 'tellraw {player} {"text":"[奖励] 面包 ×20","color":"gold"}'
-
-  # ===========================================================================
-  #  主线03 · 深入烛龙
-  #  条件：不可死亡；30 分钟内完成；击杀 mm 怪 shouwei 不得超过 3 个
-  #  失败后 30 分钟不能重接；主动放弃 60 分钟不能重接
-  #  流程：找卡特 → 取 zhulong_log_drive → 撤离 → 完成，40 面包
-  # ===========================================================================
+      items:
+      - id: minecraft:bread
+        amount: 20
+    after:
+    - main01
+    steps:
+    - id: arrive
+      name: '&f抵达烛龙站'
+      commands_on_complete:
+      - tellraw {player} {"text":"[卡特·无线电] 看来你已经到那该死的地方了，现在赶紧滚回来，我们需要商讨下一步计划","color":"aqua"}
+      - rad play {player} http://www.keran.cc/voice/main_kate_05.mp3
+      - delay 100 | tellraw {player} {"text":"[卡特·无线电] 我已经把撤离坐标通过 Hermes 发给你了，最好别死在路上了，哈哈哈哈哈","color":"aqua"}
+      - delay 100 | rad play {player} http://www.keran.cc/voice/main_kate_06.mp3
+      enter: snow:zhulongzhan
+    - id: recall
+      name: '&f快撤'
+      wait: 11s
+    - id: extract
+      name: '&f想办法撤离'
+      trigger: zhulong_main02_extracted
   main03:
     name: '&6主线03 · 深入烛龙'
-    type: MAIN
     weight: 98
-    icon: 'quest_ui_main'
-    stage_visibility: SEQUENTIAL
-    hidden: true                     # 前置未满足时显示「？？？」
-
+    hidden: true
     description: '&7把主楼电脑上的数据日志带回来，别惊动机械守卫。'
-
-    prerequisites:
-      quest_completed_all:
-        - 'zhulong:main01'
-        - 'zhulong:main02'
-
-    # ---- 失败条件 ----
     failure:
-      on_death: true                 # 不可死亡
-      time_limit: 1800               # 30 分钟内完成
-      reset_on_fail: WHOLE_QUEST     # 失败后整任务重置
-      fail_cooldown: 1800            # 失败后 30 分钟不能重接
+      on_death: true
+      time_limit: 1800
+      reset_on_fail: WHOLE_QUEST
+      fail_cooldown: 1800
       max_kills:
-        count: 3                     # 击杀超过 3 个即判失败
-        types: ['shouwei']           # 只统计 mm 怪 shouwei
-
-    # ---- 主动放弃：60 分钟不能重接 ----
+        count: 3
+        types:
+        - shouwei
     abandon:
       allowed: true
       cooldown: 3600
       message: '&7[卡特] 懦夫……'
       commands:
-        - 'tellraw {player} {"text":"[卡特] 懦夫……","color":"red"}'
-
-    stages:
-      # ---- stage1：和卡特对话 ----
-      - id: brief
-        name: '&f和卡特对话'
-        mode: ALL
-        # ⚠ 测试期专用：进本阶段直接发一份数据日志。
-        #   正式玩法应由地图上的主楼电脑（容器/交互机制）发放，
-        #   上线前请删掉这条 give，否则玩家不用去拿也能过 stage2。
-        commands_on_complete:
-          - 'oraxen give {player} zhulong_log_drive 1'
-        requirements:
-          - type: npc_talk
-            npc: '卡特'
-            display: '与卡特交谈'
-            description: '右键卡特，听他交代任务'
-        # 注：Oraxen 实际语法为 /oraxen give <targets> <item> <amount>，amount 必填（已实测）。
-
-      # ---- stage2：找到数据日志 ----
-      - id: get_data
-        name: '&f找到数据日志'
-        mode: ALL
-        requirements:
-          - type: oraxen_item
-            item: 'zhulong_log_drive'
-            count: 1
-            consume: false           # 这里只是"拿到就算"，不扣除，后面主线04要上交
-            display: '获取烛龙站数据日志'
-            description: '在主楼电脑上拿到 zhulong_log_drive'
-
-      # ---- stage3：撤离 ----
-      - id: extract
-        name: '&f撤离'
-        mode: ALL
-        requirements:
-          - type: custom_trigger
-            key: 'zhulong_main03_extracted'
-            display: '撤离'
-            description: '完成撤离（由 ExtractionPoints 判定）'
-
+      - tellraw {player} {"text":"[卡特] 懦夫……","color":"red"}
     on_start:
-      - 'minecraft:title {player} title {"text":"30:00","color":"red"}'
-      - 'minecraft:title {player} subtitle {"text":"不可死亡 · 守卫击杀上限 3","color":"gray"}'
-      - 'tellraw {player} {"text":"[卡特] 没用的东西……","color":"gray"}'
-
+    - minecraft:title {player} title {"text":"30:00","color":"red"}
+    - minecraft:title {player} subtitle {"text":"不可死亡 · 守卫击杀上限 3","color":"gray"}
+    - tellraw {player} {"text":"[卡特] 没用的东西……","color":"gray"}
     on_complete:
-      - 'tellraw {player} {"text":"[卡特] 来找我吧。","color":"aqua"}'
-      - 'tellraw {player} {"text":"[结算] 获得 40 个面包。","color":"gold"}'
-
+    - tellraw {player} {"text":"[卡特] 来找我吧。","color":"aqua"}
+    - tellraw {player} {"text":"[结算] 获得 40 个面包。","color":"gold"}
     rewards:
-      commands:
-        - 'give {player} minecraft:bread 40'
-        - 'tellraw {player} {"text":"[奖励] 面包 ×40","color":"gold"}'
-
-  # ===========================================================================
-  #  主线04 · 抉择（★ 需要持有 zhulong_log_drive 才能进行）
-  #  流程：持数据日志右键卡特 → 对话内弹出 AB 抉择
-  #        A. 说真话，上交数据（扣除 zhulong_log_drive）→ 解锁 05A
-  #        B. 说假话，没找到（不扣）            → 解锁 05B
-  # ===========================================================================
+      items:
+      - id: minecraft:bread
+        amount: 40
+    after:
+    - main01
+    - main02
+    steps:
+    - id: brief
+      name: '&f和卡特对话'
+      commands_on_complete:
+      - oraxen give {player} zhulong_log_drive 1
+      talk: 卡特
+    - id: get_data
+      name: '&f找到数据日志'
+      requirements:
+      - type: item
+        item: zhulong_log_drive
+        count: 1
+        consume: false
+        display: 获取烛龙站数据日志
+        description: 在主楼电脑上拿到 zhulong_log_drive
+    - id: extract
+      name: '&f撤离'
+      trigger: zhulong_main03_extracted
   main04:
     name: '&6主线04 · 交差'
-    type: MAIN
     weight: 97
-    icon: 'quest_ui_choice'
-    stage_visibility: SEQUENTIAL
-    hidden: true                     # 前置未满足时显示「？？？」
-
+    hidden: true
     description: '&7你找到他要的东西了吗？'
-
-    # ★ 这里【故意不加】oraxen_items 物品门槛。
-    #   原设计是「必须持有数据盘才能接」+「抉择时消耗数据盘」，这两条会互相打架：
-    #   物品在「接任务」时校验、在「抉择」时扣除，而数据盘只有一份 ——
-    #   玩家一旦在别处弄丢/交掉，就再也接不到 main04，整条主线彻底断掉（实测踩到）。
-    #   数据盘的持有校验改由 dialogue.yml 里抉择选项的 require_item 负责，
-    #   那里更贴近真正的使用点（没数据盘时选项会灰掉，而不是整个任务接不了）。
-    prerequisites:
-      quest_completed_all:
-        - 'zhulong:main03'
-
-    abandon:
-      allowed: true
-      cooldown: 0
-
-    stages:
-      - id: report
-        name: '&f向卡特复命'
-        mode: ALL
-        requirements:
-          # 对话里做抉择，对话结束后本阶段完成。
-          # 抉择本身（选 A 还是 B）在 dialogue.yml 的 kate_main04 里配置，
-          # 选项的 quest 字段会直接接取对应的 05A / 05B。
-          - type: npc_talk
-            npc: '卡特'
-            display: '向卡特复命'
-            description: '右键卡特，如实交代或撒谎'
-
     on_start:
-      - 'tellraw {player} {"text":"[提示] 带着数据日志去找卡特。","color":"yellow"}'
-
+    - tellraw {player} {"text":"[提示] 带着数据日志去找卡特。","color":"yellow"}
     on_complete:
-      - 'minecraft:title {player} title {"text":"主线04 完成","color":"gold"}'
-      - 'minecraft:title {player} subtitle {"text":"新的路线已解锁","color":"gray"}'
-
-  # ===========================================================================
-  #  主线05A · 合作线（A 支）
-  #  解锁条件：主线04 抉择选了 A
-  #  隐藏任务，只能被抉择进入；与 05B 互斥
-  # ===========================================================================
+    - minecraft:title {player} title {"text":"主线04 完成","color":"gold"}
+    - minecraft:title {player} subtitle {"text":"新的路线已解锁","color":"gray"}
+    after:
+    - main03
+    steps:
+    - id: report
+      name: '&f向卡特复命'
+      talk: 卡特
   main05a:
     name: '&6主线05A · 反击'
-    type: MAIN
     weight: 96
-    icon: 'quest_ui_main'
-    stage_visibility: SEQUENTIAL
     hidden: true
-    exclusive_group: 'zhulong_final'
+    exclusive_group: zhulong_final
     exclusive_with:
-      - 'zhulong:main05b'
-
+    - zhulong:main05b
     description: '&7卡特要你一起去把烛龙站里的东西彻底清理掉。'
-
     prerequisites:
       quest_completed_all:
-        - 'zhulong:main03'
-      # ★ 抉择门：必须通过与卡特的对话抉择（选 A）才能接。
-      #   抉择发生时写入 treeState 的 choice:zhulong_final=A，
-      #   这里读同一个键 —— 于是没做过抉择的玩家在 GUI 里看到的是
-      #   「？？？」且点不动，而不是「能点但接了报错」。
-      #   注意：hidden 只影响显示，canAccept 不检查 hidden，
-      #   所以真正的门禁必须靠这条 quest_choice，不能只靠 hidden。
-      quest_choice: 'zhulong_final'
-      choice_value: 'A'
-
-    stages:
-      # ---- stage1：卡特交代收尾行动 ----
-      - id: brief
-        name: '&f与卡特的人一起推进'
-        mode: ALL
-        requirements:
-          # 走完 kate_main05a 对话即完成（对话播完 → fireNpcTalk 判定通过）。
-          #
-          # ⚠ 已知行为（有意的取舍，不是 bug）：
-          #   抉择那段对话（kate_main04）播完时也会 fireNpcTalk(卡特)，
-          #   而 fireNpcTalk 会对【所有】ACTIVE 任务无差别推进 ——
-          #   此刻 main05a 刚被 accept、stage1 正好也挂在「和卡特对话」上，
-          #   于是本阶段被同一次对话顺带完成，玩家不必再跑一趟找卡特。
-          #   情节上说得通：卡特刚说了「明智的选择，等着吧」，这句就是交代。
-          #   若想强制玩家再谈一次，需给 fireNpcTalk 加阶段过滤（改代码），
-          #   或把本阶段换成别的判定类型。
-          - type: npc_talk
-            npc: '卡特'
-            display: '与卡特交谈'
-            description: '听卡特交代收尾行动'
-
-      # ---- stage2：回烛龙站 ----
-      - id: return
-        name: '&f返回烛龙站'
-        mode: ALL
-        commands_on_complete:
-          - 'tellraw {player} {"text":"[卡特·无线电] 到了？好，等我信号。","color":"aqua"}'
-        requirements:
-          - type: region_enter
-            region: 'zhulongzhan'
-            world: 'snow'
-            display: '进入烛龙站'
-            description: '重新进入烛龙站区域'
-
+      - zhulong:main03
+      quest_choice: zhulong_final
+      choice_value: A
     on_start:
-      - 'tellraw {player} {"text":"[卡特] 明智的选择！现在等着吧，我会找你的。","color":"green"}'
-      - 'tellraw {player} {"text":"[提示] 回去找卡特，然后回烛龙站。","color":"yellow"}'
-
+    - tellraw {player} {"text":"[卡特] 明智的选择！现在等着吧，我会找你的。","color":"green"}
+    - tellraw {player} {"text":"[提示] 回去找卡特，然后回烛龙站。","color":"yellow"}
     on_complete:
-      - 'tellraw {player} {"text":"[卡特] 干得漂亮。剩下的交给联合。","color":"green"}'
-
+    - tellraw {player} {"text":"[卡特] 干得漂亮。剩下的交给联合。","color":"green"}
     rewards:
       money: 10000
       exp: 1000
-      commands:
-        - 'tellraw {player} {"text":"[奖励] 10000 金币 + 1000 经验","color":"gold"}'
-
-  # ===========================================================================
-  #  主线05B · 决裂线（B 支）
-  #  解锁条件：主线04 抉择选了 B
-  #  隐藏任务；与 05A 互斥；走完即终结整棵树
-  # ===========================================================================
+    steps:
+    - id: brief
+      name: '&f与卡特的人一起推进'
+      talk: 卡特
+    - id: return
+      name: '&f返回烛龙站'
+      commands_on_complete:
+      - tellraw {player} {"text":"[卡特·无线电] 到了？好，等我信号。","color":"aqua"}
+      enter: snow:zhulongzhan
   main05b:
     name: '&6主线05B · 打发'
-    type: MAIN
     weight: 95
-    icon: 'quest_ui_failed'
-    stage_visibility: SEQUENTIAL
     hidden: true
-    exclusive_group: 'zhulong_final'
+    exclusive_group: zhulong_final
     exclusive_with:
-      - 'zhulong:main05a'
-
+    - zhulong:main05a
     description: '&7卡特给了点东西，让你滚蛋。'
-
     prerequisites:
       quest_completed_all:
-        - 'zhulong:main03'
-      # ★ 抉择门：必须通过与卡特的对话抉择（选 B）才能接，理由同 05A。
-      quest_choice: 'zhulong_final'
-      choice_value: 'B'
-
-    stages:
-      - id: dismiss
-        name: '&f拿上东西，走人'
-        mode: ALL
-        requirements:
-          # 走完 kate_main05b 对话即完成（卡特给点东西打发你）
-          - type: npc_talk
-            npc: '卡特'
-            display: '与卡特交谈'
-            description: '听卡特把话说完，拿上东西走人'
-
+      - zhulong:main03
+      quest_choice: zhulong_final
+      choice_value: B
     on_start:
-      - 'tellraw {player} {"text":"[卡特] ……好吧，你在这等会。","color":"gray"}'
-      - 'tellraw {player} {"text":"[提示] 去找卡特领东西。","color":"yellow"}'
-
+    - tellraw {player} {"text":"[卡特] ……好吧，你在这等会。","color":"gray"}
+    - tellraw {player} {"text":"[提示] 去找卡特领东西。","color":"yellow"}
     on_complete:
-      - 'tellraw {player} {"text":"[卡特] 拿着这些，别让我再看见你。","color":"red"}'
-
+    - tellraw {player} {"text":"[卡特] 拿着这些，别让我再看见你。","color":"red"}
     rewards:
-      commands:
-        - 'give {player} minecraft:bread 5'
-        - 'give {player} minecraft:emerald 8'
-        - 'tellraw {player} {"text":"[奖励] 面包 ×5 + 绿宝石 ×8","color":"gold"}'
-
-  # ===========================================================================
-  #  支线01 · 材料收集
-  #  「黑市商人主动联系到了我……他让我到 D2 区域找他」
-  #  流程：找黑市商人对话 → 取 ice_core_sample → 回去右键他交货
-  #        交货抉择：A 还没有（不结束，停在 stage3） / B 拿，给你（扣冰芯）
-  #        ★ 对话播完 → npc_talk 判定通过 → stage3 完成 → 发 38 钻石
-  # ===========================================================================
+      items:
+      - id: minecraft:bread
+        amount: 5
+      - id: minecraft:emerald
+        amount: 8
+    steps:
+    - id: dismiss
+      name: '&f拿上东西，走人'
+      talk: 卡特
   side01:
     name: '&b支线01 · 材料收集'
     type: SIDE
     weight: 50
-    icon: 'quest_ui_side'
-    stage_visibility: SEQUENTIAL
-    hidden: true                     # 前置未满足时显示「？？？」
-
+    hidden: true
     description: '&7黑市商人主动联系到了我……他让我到 D2 区域找他。'
-
-    prerequisites:
-      quest_completed_all:
-        - 'zhulong:main01'
-        - 'zhulong:main02'
-
-    abandon:
-      allowed: true
-      cooldown: 0
-
-    stages:
-      # ---- stage1：和黑市商人对话 ----
-      # 对话内容见 dialogue.yml 的 dealer_brief（priority 50）
-      - id: meet
-        name: '&f和黑市商人对话'
-        mode: ALL
-        # ⚠ 测试期专用：进本阶段直接发一份冰芯样本。
-        #   正式玩法应由地图上的冰盖采集点（容器/交互机制）发放，
-        #   上线前请删掉这条 give，否则玩家不用去采也能过 stage2。
-        commands_on_complete:
-          - 'oraxen give {player} ice_core_sample 1'
-        requirements:
-          - type: npc_talk
-            npc: '黑市商人'
-            display: '与黑市商人交谈'
-            description: '右键黑市商人，听他要什么'
-
-      # ---- stage2：找到冰芯样本 ----
-      - id: find_core
-        name: '&f找到一个冰芯样本'
-        mode: ALL
-        # 需求原文：「找到后提示：（黑市商人要的东西找到了…）」
-        commands_on_complete:
-          - 'tellraw {player} {"text":"[心里话] 黑市商人要的东西找到了……","color":"gray"}'
-        requirements:
-          - type: oraxen_item
-            item: 'ice_core_sample'
-            count: 1
-            consume: false           # 拿到即可，交货时才扣
-            display: '找到冰芯样本'
-            description: '获取 ice_core_sample'
-
-      # ---- stage3：右键黑市商人交货 ----
-      # ★ 对话 dealer_deliver（priority 100，stage_at_least: 2）会覆盖 dealer_brief
-      #   选 A「不，还没有」→ 任务【停在 stage3】，玩家之后还能再来交
-      #   选 B「拿，给你」  → 选项的 consume 扣掉冰芯
-      #                       → 对话播完 → npc_talk 判定通过 → 本阶段完成
-      #                       → 任务完成 → 发 38 钻石
-      - id: deliver
-        name: '&f交货'
-        mode: ALL
-        requirements:
-          - type: npc_talk
-            npc: '黑市商人'
-            display: '把冰芯交给黑市商人'
-            description: '右键黑市商人，在对话里选择交货'
-
     on_start:
-      - 'tellraw {player} {"text":"[提示] 到 snow（雪原）的 D2 区域找黑市商人。","color":"yellow"}'
-
+    - tellraw {player} {"text":"[提示] 到 snow（雪原）的 D2 区域找黑市商人。","color":"yellow"}
     on_complete:
-      - 'tellraw {player} {"text":"[黑市商人] 好！好！不错！拿着，这是给你的。","color":"green"}'
-      - 'tellraw {player} {"text":"[结算] 获得 38 个钻石。","color":"gold"}'
-
+    - tellraw {player} {"text":"[黑市商人] 好！好！不错！拿着，这是给你的。","color":"green"}
+    - tellraw {player} {"text":"[结算] 获得 38 个钻石。","color":"gold"}
     rewards:
-      commands:
-        - 'give {player} minecraft:diamond 38'
-        - 'tellraw {player} {"text":"[奖励] 钻石 ×38","color":"gold"}'
-
-  # ===========================================================================
-  #  支线02 · 占位（A 线解锁，内容待补）
-  # ===========================================================================
+      items:
+      - id: minecraft:diamond
+        amount: 38
+    after:
+    - main01
+    - main02
+    steps:
+    - id: meet
+      name: '&f和黑市商人对话'
+      talk: 黑市商人
+    - id: find_core
+      name: '&f找到一个冰芯样本'
+      commands_on_complete:
+      - tellraw {player} {"text":"[心里话] 黑市商人要的东西找到了……","color":"gray"}
+      requirements:
+      - type: item
+        item: ice_core_sample
+        count: 1
+        consume: false
+        display: 找到冰芯样本
+        description: 获取 ice_core_sample
+    - id: deliver
+      name: '&f交货'
+      talk: 黑市商人
   side02:
     name: '&b支线02 · 联合的委托'
     type: SIDE
     weight: 48
-    icon: 'quest_ui_side'
-    stage_visibility: SEQUENTIAL
     hidden: true
-
     description: '&7联合还有别的活儿要人干。'
-
-    prerequisites:
-      quest_completed_all:
-        - 'zhulong:main05a'
-
-    stages:
-      - id: tbd
-        name: '&f待定'
-        mode: ALL
-        requirements:
-          - type: custom_trigger
-            key: 'zhulong_side02_done'
-            display: '完成委托'
-            description: '内容待补充'
-
     rewards:
       money: 3000
       exp: 300
-
-  # ===========================================================================
-  #  循环任务01 · A 线解锁的日常
-  # ===========================================================================
+    after:
+    - main05a
+    steps:
+    - id: tbd
+      name: '&f待定'
+      trigger: zhulong_side02_done
   daily01:
     name: '&b循环任务01 · 清扫'
     type: SIDE
     weight: 40
-    icon: 'quest_ui_side'
-    stage_visibility: SEQUENTIAL
     repeatable: true
-    cooldown: 43200                 # 12 小时
-    hidden: true                     # 前置（main05a）未满足时显示「？？？」
-
+    cooldown: 43200
+    hidden: true
     description: '&7把烛龙站外围的机械守卫清一清。'
-
-    prerequisites:
-      quest_completed_all:
-        - 'zhulong:main05a'
-
     abandon:
       allowed: true
       cooldown: 300
-
-    stages:
-      - id: clear
-        name: '&f清扫机械守卫'
-        mode: ALL
-        requirements:
-          - type: mm_kill
-            mobs: ['shouwei']
-            count: 5
-            display: '击杀机械守卫'
-            description: '击杀 5 个 shouwei'
-
     rewards:
       money: 4000
       exp: 400
-      commands:
-        - 'give {player} minecraft:bread 10'
-        - 'tellraw {player} {"text":"[奖励] 4000 金币 + 400 经验 + 面包 ×10","color":"gold"}'
+      items:
+      - id: minecraft:bread
+        amount: 10
+    after:
+    - main05a
+    steps:
+    - id: clear
+      name: '&f清扫机械守卫'
+      requirements:
+      - type: mm_kill
+        mobs:
+        - shouwei
+        count: 5
+        display: 击杀机械守卫
+        description: 击杀 5 个 shouwei
+schema: 2
+defaults:
+  type: MAIN

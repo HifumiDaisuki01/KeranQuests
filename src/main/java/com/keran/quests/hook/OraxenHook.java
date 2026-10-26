@@ -81,6 +81,8 @@ public class OraxenHook extends Hook {
 
     /** 判断某 Oraxen ID 是否存在（配置校验用）。 */
     public boolean exists(String id) {
+        if (vanilla(id) != null) return true;
+        if (id != null && id.startsWith("oraxen:")) id = id.substring(7);
         if (!available || id == null) return false;
         try {
             Object r = callStatic(CLS_ITEMS, "exists",
@@ -99,6 +101,9 @@ public class OraxenHook extends Hook {
      * 自己拼 ItemStack。这样在 Oraxen 与服务端版本不匹配时依然可用。
      */
     public ItemStack build(String id, int amount) {
+        Material material = vanilla(id);
+        if (material != null) return new ItemStack(material, Math.max(1, Math.min(material.getMaxStackSize(), amount)));
+        if (id != null && id.startsWith("oraxen:")) id = id.substring(7);
         if (!available || id == null) return null;
         ensureDefsLoaded();
 
@@ -200,49 +205,54 @@ public class OraxenHook extends Hook {
 
     private volatile String lastError = null;
 
-    /** 统计玩家背包中某 Oraxen 物品的总数。 */
-    public int countItem(Player player, String oraxenId) {
-        if (!available || player == null || oraxenId == null) return 0;
-        int total = 0;
-        for (ItemStack it : player.getInventory().getContents()) {
-            if (it == null || it.getType().isAir()) continue;
-            String id = getItemId(it);
-            if (oraxenId.equals(id)) total += it.getAmount();
-        }
-        return total;
+    private Material vanilla(String id) {
+        if (id == null || !id.startsWith("minecraft:")) return null;
+        Material material = Material.matchMaterial(id.substring(10));
+        return material == null || material.isAir() || !material.isItem() ? null : material;
     }
 
-    /**
-     * 从玩家背包移除指定数量的 Oraxen 物品。
-     *
-     * @return 实际移除的数量
-     */
-    public int removeItem(Player player, String oraxenId, int amount) {
-        if (!available || player == null || oraxenId == null) return 0;
+    private boolean matches(ItemStack item, String id) {
+        if (item == null || item.getType().isAir() || id == null) return false;
+        Material material = vanilla(id);
+        if (material != null) return item.getType() == material;
+        if (id.startsWith("oraxen:")) id = id.substring(7);
+        return id.equalsIgnoreCase(getItemId(item));
+    }
+
+    /** Supports minecraft: IDs without Oraxen; legacy bare IDs remain Oraxen IDs. */
+    public int countItem(Player player, String id) {
+        if (player == null || id == null) return 0;
+        int count = 0;
+        for (ItemStack item : player.getInventory().getContents()) if (matches(item, id)) count += item.getAmount();
+        return count;
+    }
+
+    public int removeItem(Player player, String id, int amount) {
+        if (player == null || id == null || amount <= 0) return 0;
         int remaining = amount;
         ItemStack[] contents = player.getInventory().getContents();
         for (int i = 0; i < contents.length && remaining > 0; i++) {
-            ItemStack it = contents[i];
-            if (it == null || it.getType().isAir()) continue;
-            String id = getItemId(it);
-            if (!oraxenId.equals(id)) continue;
-            int take = Math.min(it.getAmount(), remaining);
-            it.setAmount(it.getAmount() - take);
+            ItemStack item = contents[i];
+            if (!matches(item, id)) continue;
+            int take = Math.min(item.getAmount(), remaining);
+            item.setAmount(item.getAmount() - take);
             remaining -= take;
-            if (it.getAmount() <= 0) player.getInventory().setItem(i, null);
+            player.getInventory().setItem(i, item.getAmount() == 0 ? null : item);
         }
-        player.updateInventory();
         return amount - remaining;
     }
 
-    /** 给玩家发放物品。成功返回 true。 */
-    public boolean giveItem(Player player, String oraxenId, int amount) {
-        if (!available) return false;
-        ItemStack stack = build(oraxenId, amount);
-        if (stack == null) return false;
-        java.util.Map<Integer, ItemStack> leftover = player.getInventory().addItem(stack);
-        for (ItemStack left : leftover.values()) {
-            player.getWorld().dropItemNaturally(player.getLocation(), left);
+    public boolean giveItem(Player player, String id, int amount) {
+        if (amount <= 0) return false;
+        ItemStack prototype = build(id, 1);
+        if (prototype == null) return false;
+        int remaining = amount;
+        while (remaining > 0) {
+            ItemStack stack = prototype.clone();
+            stack.setAmount(Math.min(stack.getMaxStackSize(), remaining));
+            remaining -= stack.getAmount();
+            for (ItemStack left : player.getInventory().addItem(stack).values())
+                player.getWorld().dropItemNaturally(player.getLocation(), left);
         }
         return true;
     }

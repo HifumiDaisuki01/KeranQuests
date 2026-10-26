@@ -54,6 +54,14 @@ public class ItemCollectListener implements Listener {
         scheduleSync(player);
     }
 
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onDrop(org.bukkit.event.player.PlayerDropItemEvent event) { scheduleSync(event.getPlayer()); }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onDrag(org.bukkit.event.inventory.InventoryDragEvent event) {
+        if (event.getWhoClicked() instanceof Player p) scheduleSync(p);
+    }
+
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         // 上线时同步一次，覆盖"离线期间物品变化"的情况
@@ -61,8 +69,11 @@ public class ItemCollectListener implements Listener {
     }
 
     private void scheduleSync(Player player) {
-        if (syncing.contains(player.getUniqueId())) return;
-        plugin.getServer().getScheduler().runTask(plugin, () -> syncInventory(player));
+        if (!syncing.add(player.getUniqueId())) return;
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            syncing.remove(player.getUniqueId());
+            syncInventory(player);
+        });
     }
 
     /** 扫描玩家背包，把每个 oraxen_item 要求的进度同步为实际持有量。 */
@@ -71,7 +82,6 @@ public class ItemCollectListener implements Listener {
         if (!syncing.add(id)) return;
         try {
             if (!player.isOnline()) return;
-            if (!plugin.getOraxenHook().isAvailable()) return;
             syncAll(player);
         } finally {
             syncing.remove(id);
@@ -103,7 +113,7 @@ public class ItemCollectListener implements Listener {
                 String itemId = req.getItem();
                 if (itemId == null || itemId.isBlank()) continue;
 
-                int owned = countItem(player, itemId);
+                int owned = plugin.getOraxenHook().countItem(player, itemId);
                 int target = req.target();
                 int nv = Math.min(target, owned);
                 if (prog.getRequirementProgress(si, ri) != nv) {

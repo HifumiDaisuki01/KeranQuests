@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "keranquests_client",
+  "version": "${version}",
+  "name": "KeranQuests Client",
+  "description": "独立任务树、任务详情、剧情对话与追踪 HUD。配套 Paper KeranQuests 2。",
+  "authors": ["Keran Technology"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": { "client": ["com.keran.quests.clientmod.KeranQuestsClient"] },
+  "depends": { "fabricloader": ">=0.15.0", "minecraft": "1.20.1", "java": ">=17", "fabric-api": "*" }
+}

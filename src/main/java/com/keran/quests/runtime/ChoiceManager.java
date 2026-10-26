@@ -49,41 +49,28 @@ public class ChoiceManager {
         if (choiceIndex < 0 || choiceIndex >= stage.getChoices().size()) {
             return Text.color("&c无效的选项。");
         }
-        QuestStage.Choice choice = stage.getChoices().get(choiceIndex);
         PlayerData data = plugin.getPlayerData(player);
-
-        // 记录抉择（树级状态）
-        String group = stage.getChoiceGroup() != null && !stage.getChoiceGroup().isBlank()
-                ? stage.getChoiceGroup()
-                : (quest.getTreeId() + "_" + quest.getId() + "_choice");
-        String value = choiceIndex == 0 ? "A" : (choiceIndex == 1 ? "B" : String.valueOf(choiceIndex));
-        data.setTreeState(quest.getTreeId(), "choice:" + group, value);
-        data.markDirty();
-
-        // 推进原任务的阶段（抉择节点已完成）
-        QuestProgress p = data.getOrCreateProgress(quest.getFullId());
-        p.markStageCompleted(p.getStageIndex());
-        p.advanceStage();
-        plugin.getPlayerDataStore().save(data);
-
-        // 解锁目标分支任务（把分支任务设为 AVAILABLE 并接取）
+        QuestProgress progress = data.getProgress(quest.getFullId());
+        if (progress == null || progress.getState() != com.keran.quests.config.model.enums.QuestState.ACTIVE
+                || progress.getStageIndex() >= quest.getStageCount()
+                || quest.getStages().get(progress.getStageIndex()) != stage || !stage.isChoice()
+                || !progress.isStageHandled(progress.getStageIndex())) return "&c这个抉择已过期。";
+        QuestStage.Choice choice = stage.getChoices().get(choiceIndex);
         Quest target = plugin.getTreeLoader().resolveQuest(choice.getQuest());
-        if (target == null) {
-            plugin.getLogger().warning("抉择目标任务不存在：" + choice.getQuest());
-            return null;
+        if (target == null || target == quest) return "&c无效的分支任务。";
+        String group = stage.getChoiceGroup() == null ? quest.getTreeId() + "_" + quest.getId() + "_choice" : stage.getChoiceGroup();
+        String value = choiceIndex == 0 ? "A" : choiceIndex == 1 ? "B" : String.valueOf(choiceIndex);
+        boolean finalStage = progress.getStageIndex() == quest.getStageCount() - 1;
+        String error = plugin.getBranchService().select(player, target, finalStage ? quest : null,
+                group, value, null, 0, false);
+        if (error != null) return error;
+        if (!finalStage) {
+            progress.advanceStage();
+            data.markDirty();
+            plugin.getQuestManager().checkStageCompletion(player, quest, progress, true);
+            plugin.getPlayerDataStore().save(data);
         }
-
-        // 检查原任务是否还有后续阶段
-        plugin.getQuestManager().checkStageCompletion(player, quest, p, true);
-
-        // 自动接取分支任务
-        String err = plugin.getQuestManager().accept(player, target);
-        if (err != null) {
-            Text.send(player, "&e分支任务接取失败：" + err);
-        }
-
-        Text.send(player, plugin.getConfig().getString("messages.prefix", "")
-                + "&a你选择了：&f" + choice.getLabel());
+        Text.send(player, "&a你选择了：&f" + choice.getLabel());
         return null;
     }
 }

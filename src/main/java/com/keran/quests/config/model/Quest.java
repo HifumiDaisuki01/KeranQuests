@@ -155,6 +155,9 @@ public class Quest {
         this.abandonCooldown = abandonCooldown;
     }
 
+    private java.util.List<String> rewardDisplay = java.util.List.of();
+    public java.util.List<String> getRewardDisplay() { return rewardDisplay; }
+
     public static Quest fromConfig(String treeId, String id, ConfigurationSection sec) {
         if (sec == null) return null;
         QuestType type = QuestType.parse(sec.getString("type", "SIDE"));
@@ -288,13 +291,15 @@ public class Quest {
             }
         }
 
-        return new Quest(treeId, id, name, type, weight, icon, sv, pre, stages,
+        Quest result = new Quest(treeId, id, name, type, weight, icon, sv, pre, stages,
                 onStart, onStageComplete, onComplete, onFail, money, exp, rewardItems,
                 rewardCommands, repeatable, cooldown, resetOnComplete, exclusiveGroup,
                 exclusiveWith, terminatesTree, failOnDeath, timeLimit, failCooldown,
                 forbidden, maxKills, maxKillTypes, resetOnFail, unlockTree, hidden,
                 abandonAllowed, abandonCommands, abandonMessage, abandonCooldown,
                 sec.getString("description", ""));
+        if (rw != null) result.rewardDisplay = java.util.List.copyOf(rw.getStringList("display"));
+        return result;
     }
 
     private static ConfigurationSection toSection(Object obj) {

@@ -1,4 +1,12 @@
-# KeranQuests
+# KeranQuests 2
+
+**2.0 新增：Fabric 1.20.1 独立任务终端、自动任务关系图、HUD 追踪、NPC 对话面板，以及无需网络的可视化剧情编辑器。**
+
+- 服务端仍使用 Paper 1.20.1 / Java 17；客户端安装配套模组与 Fabric API，按 **J** 打开任务终端。
+- 自定义 UI 不依赖 Oraxen 或资源包。原有 Oraxen 任务物品继续可选兼容；`minecraft:` 物品无需 Oraxen。
+- [安装、简化语法、编辑器及升级说明](docs-v2/CONFIGURATION.md) · [2.0 发布说明](docs-v2/RELEASE.md) · [可直接使用的简化示例](examples/first-story.yml)
+- 直接打开 Release 的 `KeranQuests-Editor-2.0.0.html` 编辑任务树与对话；导出后在服务端 `/kq reload`。
+- 旧配置继续支持，已有配置不会被覆盖；错误配置重载失败时继续使用原注册表。
 
 Minecraft 任务系统插件 —— 基于 Paper 1.20.1，支持任务树、阶段推进、NPC 对话抉择、分支锁定、循环任务，并深度兼容 MythicMobs / WorldGuard / Oraxen / Citizens / LuckPerms / PlaceholderAPI。
 
@@ -6,7 +14,7 @@ Minecraft 任务系统插件 —— 基于 Paper 1.20.1，支持任务树、阶�
 
 ## 特性
 
-- **任务树** —— 一个 YAML 文件一棵树，通过 `/kq reload` 热重载
+- **任务树** —— 一个 YAML 文件一棵树（支持简化语法），通过 `/kq reload` 热重载
 - **阶段系统** —— 一个任务多个阶段，支持"全部满足"或"满足 N 条"
 - **NPC 对话系统** —— `say` / `ask` / `choose` 三种节点，聊天栏点击交互，支持条件门、优先级、冻结玩家、选项带物品门槛
 - **剧情抉择** —— 对话中二选一，选了即锁定另一条路线，分支任务由抉择自动接取
@@ -35,7 +43,7 @@ MythicMobs 5.x · WorldGuard 7.x · Oraxen 1.x · Citizens 2.x · Vault · Place
 
 ## 快速开始
 
-1. 把 `KeranQuests-1.2.0.jar` 丢进 `plugins/`
+1. 把 `KeranQuests-2.0.0.jar` 丢进 `plugins/`
 2. 启动服务器，插件会自动生成配置目录：
 
 ```
@@ -102,7 +110,8 @@ quests:
     type: MAIN                # MAIN=主线 / SIDE=支线
     weight: 10
     stages:
-      - requirements:
+      - id: arrive
+        requirements:
           - type: region_enter
             region: my_region
             world: world
@@ -159,12 +168,13 @@ dialogues:
 ```bash
 # 需要 JDK 17+
 gradle build
+# Gradle 8.6；根项目同时构建 Paper 插件与 client/ Fabric 模组
 ```
 
-产物在 `out/KeranQuests-1.2.0.jar`。
+产物在 `out/KeranQuests-2.0.0.jar`。
 
-> 编译依赖 Paper API、WorldGuard、PlaceholderAPI（由 Gradle 自动拉取）。
-> Citizens / MythicMobs / Oraxen / Vault 以 `compileOnly` + 本地 `libs/` jar 方式引用，**这些 jar 不随本仓库分发**，如需重新编译请自行放入 `libs/` 目录。
+> 编译依赖 Paper API、PlaceholderAPI（由 Gradle 自动拉取）。
+> Citizens / MythicMobs / Oraxen / Vault / WorldGuard 通过反射挂钩，构建不再需要本地 libs/。Fabric 客户端由 Loom 1.6.12 构建。
 
 ## 占位符
 

@@ -52,10 +52,11 @@ public class PlayerDataStore {
         File f = fileOf(uuid);
         if (f.exists()) {
             try {
-                YamlConfiguration yml = YamlConfiguration.loadConfiguration(f);
+                YamlConfiguration yml = new YamlConfiguration();
+                yml.load(f);
                 deserialize(data, yml);
             } catch (Throwable t) {
-                plugin.getLogger().warning("读取玩家档案失败 " + uuid + "：" + t.getMessage());
+                throw new IllegalStateException("读取玩家档案失败，保留原文件：" + uuid, t);
             }
         }
         cache.put(uuid, data);
@@ -87,7 +88,16 @@ public class PlayerDataStore {
         YamlConfiguration yml = new YamlConfiguration();
         serialize(data, yml);
         try {
-            yml.save(f);
+            java.nio.file.Path temp = java.nio.file.Files.createTempFile(dataDir.toPath(), ".kq-", ".tmp");
+            try {
+                java.nio.file.Files.writeString(temp, yml.saveToString(), java.nio.charset.StandardCharsets.UTF_8);
+                try {
+                    java.nio.file.Files.move(temp, f.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                } catch (java.nio.file.AtomicMoveNotSupportedException ex) {
+                    java.nio.file.Files.move(temp, f.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally { java.nio.file.Files.deleteIfExists(temp); }
             data.markClean();
         } catch (IOException e) {
             plugin.getLogger().warning("保存玩家档案失败 " + data.getUuid() + "：" + e.getMessage());
@@ -103,6 +113,7 @@ public class PlayerDataStore {
     // ------------------------------------------------------------------
 
     private void serialize(PlayerData data, YamlConfiguration yml) {
+        yml.set("format", 2);
         yml.set("name", data.getName());
         yml.set("tracked", data.getTrackedQuest());
 
@@ -112,9 +123,13 @@ public class PlayerDataStore {
             String key = safeKey(e.getKey());          // "zhulong:ch01" -> "zhulong.ch01"
             QuestProgress p = e.getValue();
             String path = base + "." + key;
+            yml.set(path + ".execution", p.getExecutionId());
+            yml.set(path + ".handledStages", new java.util.ArrayList<>(p.getHandledStages()));
+            yml.set(path + ".choiceShown", new java.util.ArrayList<>(p.getChoiceGuiShownStages()));
             yml.set(path + ".state", p.getState().name());
             yml.set(path + ".stage", p.getStageIndex());
             yml.set(path + ".started", p.getStartedAt());
+            yml.set(path + ".stageStarted", p.getStageStartedAt());
             yml.set(path + ".finished", p.getFinishedAt());
             if (p.getFailReason() != null) yml.set(path + ".failReason", p.getFailReason());
 
@@ -151,13 +166,17 @@ public class PlayerDataStore {
         ConfigurationSection qs = yml.getConfigurationSection("quests");
         if (qs != null) {
             for (String key : qs.getKeys(false)) {
-                String fullId = unsafeKey(key);
+                String fullId = decodeKey(key, yml);
                 QuestProgress p = data.getOrCreateProgress(fullId);
                 ConfigurationSection sec = qs.getConfigurationSection(key);
                 if (sec == null) continue;
+                p.setExecutionId(sec.getString("execution"));
+                for (int i : sec.getIntegerList("handledStages")) p.markStageHandled(i);
+                for (int i : sec.getIntegerList("choiceShown")) p.markChoiceGuiShown(i);
                 p.setState(QuestState.parse(sec.getString("state", "LOCKED")));
                 p.setStageIndex(sec.getInt("stage", 0));
                 p.setStartedAt(sec.getLong("started", 0));
+                p.setStageStartedAt(sec.getLong("stageStarted", System.currentTimeMillis()));
                 p.setFinishedAt(sec.getLong("finished", 0));
                 p.setFailReason(sec.getString("failReason", null));
 
@@ -178,13 +197,16 @@ public class PlayerDataStore {
                 ConfigurationSection trig = sec.getConfigurationSection("trig");
                 if (trig != null) {
                     for (String tk : trig.getKeys(false)) {
-                        p.getAllTriggerCounts().put(unsafeKey(tk), trig.getInt(tk));
+                        p.getAllTriggerCounts().put(decodeKey(tk, yml), trig.getInt(tk));
                     }
                 }
 
                 for (Object so : sec.getList("doneStages", new java.util.ArrayList<>())) {
                     try {
-                        p.markStageCompleted(Integer.parseInt(String.valueOf(so)));
+                        int completed = Integer.parseInt(String.valueOf(so));
+                        p.markStageCompleted(completed);
+                        // v1 存档只记录 completed，迁移后不得再次发阶段奖励。
+                        if (!sec.contains("handledStages")) p.markStageHandled(completed);
                     } catch (NumberFormatException ignored) {
                     }
                 }
@@ -194,14 +216,14 @@ public class PlayerDataStore {
         ConfigurationSection ts = yml.getConfigurationSection("treeState");
         if (ts != null) {
             for (String k : ts.getKeys(false)) {
-                data.getAllTreeState().put(unsafeKey(k), ts.getString(k));
+                data.getAllTreeState().put(decodeKey(k, yml), ts.getString(k));
             }
         }
 
         ConfigurationSection cd = yml.getConfigurationSection("cooldowns");
         if (cd != null) {
             for (String k : cd.getKeys(false)) {
-                data.getAllCooldowns().put(unsafeKey(k), cd.getLong(k));
+                data.getAllCooldowns().put(decodeKey(k, yml), cd.getLong(k));
             }
         }
 
@@ -237,6 +259,11 @@ public class PlayerDataStore {
      * 这里在按新规则解码失败时，回退到"把第一个连字符当作冒号"的旧规则，
      * 让老档案仍能被读出，玩家进度不会因升级而丢失。
      */
+    private String decodeKey(String key, YamlConfiguration yml) {
+        if (yml.getInt("format", 1) >= 2) return key.replace("%2E", ".").replace("%3A", ":").replace("%25", "%");
+        return unsafeKey(key);
+    }
+
     private String unsafeKey(String key) {
         if (key.contains("%2E") || key.contains("%3A") || key.contains("%25")) {
             return key.replace("%2E", ".").replace("%3A", ":").replace("%25", "%");

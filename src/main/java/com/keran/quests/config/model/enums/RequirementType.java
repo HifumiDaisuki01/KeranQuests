@@ -6,6 +6,7 @@ package com.keran.quests.config.model.enums;
 public enum RequirementType {
     /** 击杀 MythicMobs 怪物 */
     MM_KILL,
+    WAIT,
     /** 在 WG 区域内停留 N 秒 */
     REGION_STAY,
     /** 进入 WG 区域即完成 */

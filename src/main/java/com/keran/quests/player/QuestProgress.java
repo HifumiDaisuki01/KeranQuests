@@ -11,10 +11,18 @@ import java.util.Map;
 public class QuestProgress {
 
     private final String fullId;
+    private String executionId = java.util.UUID.randomUUID().toString();
+
+    public String getExecutionId() { return executionId; }
+    public void setExecutionId(String id) { if (id != null) executionId = id; }
+    public void newExecution() { executionId = java.util.UUID.randomUUID().toString(); }
     private QuestState state = QuestState.LOCKED;
     /** 当前阶段序号（0-based） */
     private int stageIndex = 0;
     private long startedAt = 0L;
+    private long stageStartedAt = System.currentTimeMillis();
+    public long getStageStartedAt() { return stageStartedAt; }
+    public void setStageStartedAt(long time) { stageStartedAt = time; }
     private long finishedAt = 0L;
     private String failReason = null;
 
@@ -187,10 +195,12 @@ public class QuestProgress {
 
     public void setStageIndex(int stageIndex) {
         this.stageIndex = Math.max(0, stageIndex);
+        stageStartedAt = System.currentTimeMillis();
     }
 
     public void advanceStage() {
         this.stageIndex++;
+        stageStartedAt = System.currentTimeMillis();
     }
 
     public long getStartedAt() {
