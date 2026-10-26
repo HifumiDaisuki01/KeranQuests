@@ -10,6 +10,7 @@ public final class ConfigNormalizer {
         ConfigurationSection quests = root.getConfigurationSection("quests");
         if (quests == null) throw new IllegalArgumentException("缺少 quests");
         String treeId = root.getString("id", "");
+        normalizePrerequisites(treeId, root.getConfigurationSection("prerequisites"));
         ConfigurationSection defaults = root.getConfigurationSection("defaults");
         for (String id : quests.getKeys(false)) {
             ConfigurationSection q = quests.getConfigurationSection(id);

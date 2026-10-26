@@ -555,6 +555,8 @@ public class DialogueRunner {
         runningTasks.clear();
         for (UUID uid : new ArrayList<>(talking)) {
             plugin.getFreezeManager().unfreeze(uid);
+            Player online = Bukkit.getPlayer(uid);
+            if (online != null && plugin.getClientBridge() != null) plugin.getClientBridge().endDialogue(online);
         }
         talking.clear();
         sessions.clear();

@@ -3,7 +3,7 @@ const {chromium}=require('playwright');const assert=require('node:assert/strict'
  const launch={headless:true,args:['--no-sandbox','--disable-dev-shm-usage']};if(process.env.KQ_CHROME)launch.executablePath=process.env.KQ_CHROME;
  const browser=await chromium.launch(launch);const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto('file://'+path.resolve(__dirname,'../out/KeranQuests-Editor-2.0.0.html'));
- await page.locator('.node').first().waitFor();assert.equal(await page.locator('.node').count(),2);
+ await page.locator('.node').first().waitFor();assert.equal(await page.locator('#file').isVisible(),false);assert.equal(await page.locator('.node').count(),2);
  await page.getByRole('button',{name:'＋ 添加任务',exact:true}).click();assert.equal(await page.locator('.node').count(),3);
  await page.getByLabel('任务标题',{exact:true}).fill('测试分支');await page.getByLabel('任务标题',{exact:true}).press('Tab');
  await page.getByLabel('前置任务（逗号分隔，支持 tree:quest）').fill('arrival');await page.getByLabel('前置任务（逗号分隔，支持 tree:quest）').press('Tab');
